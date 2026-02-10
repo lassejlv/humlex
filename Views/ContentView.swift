@@ -49,6 +49,7 @@ struct ContentView: View {
     @State private var isShowingAgentDirectoryPicker = false
     @State private var undoHistoryByThread: [UUID: [UndoEntry]] = [:]
     @State private var isShowingUndoPanel = false
+    @State private var isShowingDeleteAllChatsAlert = false
     @StateObject private var mcpManager = MCPManager.shared
     @EnvironmentObject private var themeManager: ThemeManager
     @EnvironmentObject private var appUpdater: AppUpdater
@@ -178,6 +179,14 @@ struct ContentView: View {
                                 }
                                 
                                 Divider()
+
+                                Button(role: .destructive) {
+                                    isShowingDeleteAllChatsAlert = true
+                                } label: {
+                                    Label("Delete All Chats", systemImage: "trash.slash")
+                                }
+
+                                Divider()
                                 
                                 Button(role: .destructive) {
                                     threadToDelete = thread
@@ -189,6 +198,13 @@ struct ContentView: View {
                     }
                     .padding(.horizontal, 6)
                     .padding(.vertical, 4)
+                }
+                .contextMenu {
+                    Button(role: .destructive) {
+                        isShowingDeleteAllChatsAlert = true
+                    } label: {
+                        Label("Delete All Chats", systemImage: "trash.slash")
+                    }
                 }
 
                 theme.divider.frame(height: 1)
@@ -350,6 +366,14 @@ struct ContentView: View {
             }
         } message: {
             Text("Are you sure you want to delete \"\(threadToDelete?.title ?? "this chat")\"? This cannot be undone.")
+        }
+        .alert("Delete All Chats", isPresented: $isShowingDeleteAllChatsAlert) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete All", role: .destructive) {
+                clearAllChats(showToast: true)
+            }
+        } message: {
+            Text("This removes all conversations and cannot be undone.")
         }
         .onAppear {
             if !didLoadAPIKeys {
@@ -595,9 +619,7 @@ struct ContentView: View {
             subtitle: "Remove all conversations",
             icon: "trash.fill"
         ) {
-            threads = [ChatThread(id: UUID(), title: "New Chat", messages: [])]
-            selectedThreadID = threads.first?.id
-            toastManager.show(.success("All chats cleared", icon: "trash"))
+            clearAllChats(showToast: true)
         })
 
         // Agent mode toggle
@@ -639,7 +661,7 @@ struct ContentView: View {
         Button {
             isShowingModelPicker.toggle()
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: 4) {
                 Text(selectedModelLabel)
                     .fontWeight(.medium)
                     .lineLimit(1)
@@ -650,7 +672,8 @@ struct ContentView: View {
             .foregroundStyle(theme.textPrimary)
         }
         .buttonStyle(.plain)
-        .frame(maxWidth: 260)
+        .controlSize(.small)
+        .fixedSize(horizontal: true, vertical: false)
         .popover(isPresented: $isShowingModelPicker, arrowEdge: .bottom) {
             ModelPickerPopover(
                 models: models,
@@ -665,6 +688,14 @@ struct ContentView: View {
         let thread = ChatThread(id: UUID(), title: "New Chat", messages: [])
         threads.insert(thread, at: 0)
         selectedThreadID = thread.id
+    }
+
+    private func clearAllChats(showToast: Bool) {
+        threads = [ChatThread(id: UUID(), title: "New Chat", messages: [])]
+        selectedThreadID = threads.first?.id
+        if showToast {
+            toastManager.show(.success("All chats cleared", icon: "trash"))
+        }
     }
 
     private func exportThreadToMarkdown(_ thread: ChatThread) {
@@ -1093,7 +1124,13 @@ struct ContentView: View {
                 }()
 
                 let toolCalls = (message.toolCalls ?? []).map {
-                    ToolCallInfo(id: $0.id, name: $0.name, arguments: $0.arguments, serverName: $0.serverName)
+                    ToolCallInfo(
+                        id: $0.id,
+                        name: $0.name,
+                        arguments: $0.arguments,
+                        serverName: $0.serverName,
+                        thoughtSignature: $0.thoughtSignature
+                    )
                 }
 
                 let toolResult: ToolResultInfo? = {
@@ -1149,7 +1186,13 @@ struct ContentView: View {
                         case .cliToolUse(let id, let name, let arguments, let serverName):
                             // Append CLI tool call to the message in real-time for live display
                             appendCLIToolCall(
-                                ChatMessage.ToolCall(id: id, name: name, arguments: arguments, serverName: serverName),
+                                ChatMessage.ToolCall(
+                                    id: id,
+                                    name: name,
+                                    arguments: arguments,
+                                    serverName: serverName,
+                                    thoughtSignature: nil
+                                ),
                                 to: assistantID, in: threadID
                             )
                         case .done:
@@ -1170,7 +1213,13 @@ struct ContentView: View {
                         // CLI providers (Claude Code, Codex) handle tools internally.
                         // Store tool calls on the message for display only — do NOT execute them.
                         let resolvedToolCalls = result.toolCalls.map { tc -> ChatMessage.ToolCall in
-                            ChatMessage.ToolCall(id: tc.id, name: tc.name, arguments: tc.arguments, serverName: tc.serverName)
+                            ChatMessage.ToolCall(
+                                id: tc.id,
+                                name: tc.name,
+                                arguments: tc.arguments,
+                                serverName: tc.serverName,
+                                thoughtSignature: tc.thoughtSignature
+                            )
                         }
                         threads[threadIdx].messages[msgIdx].toolCalls = resolvedToolCalls
                         // Done — no tool execution, no loop continuation
@@ -1190,7 +1239,13 @@ struct ContentView: View {
                     // Map tool call server names from tool registry
                     let resolvedToolCalls = result.toolCalls.map { tc -> ChatMessage.ToolCall in
                         let serverName = availableTools.first(where: { $0.name == tc.name })?.serverName ?? ""
-                        return ChatMessage.ToolCall(id: tc.id, name: tc.name, arguments: tc.arguments, serverName: serverName)
+                        return ChatMessage.ToolCall(
+                            id: tc.id,
+                            name: tc.name,
+                            arguments: tc.arguments,
+                            serverName: serverName,
+                            thoughtSignature: tc.thoughtSignature
+                        )
                     }
                     threads[threadIdx].messages[msgIdx].toolCalls = resolvedToolCalls
 

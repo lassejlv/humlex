@@ -52,6 +52,15 @@ struct ToolCallInfo: Hashable {
     let name: String
     let arguments: String  // JSON string of arguments
     let serverName: String // MCP server that owns this tool
+    let thoughtSignature: String?
+
+    init(id: String, name: String, arguments: String, serverName: String, thoughtSignature: String? = nil) {
+        self.id = id
+        self.name = name
+        self.arguments = arguments
+        self.serverName = serverName
+        self.thoughtSignature = thoughtSignature
+    }
 }
 
 /// Represents the result of executing a tool call.

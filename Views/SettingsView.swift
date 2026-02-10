@@ -1190,7 +1190,10 @@ struct SettingsView: View {
     private var bottomBar: some View {
         HStack(spacing: 12) {
             Button {
-                appUpdater.checkForUpdates()
+                onClose()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    appUpdater.checkForUpdates()
+                }
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "arrow.triangle.2.circlepath")
