@@ -15,11 +15,14 @@ struct ChatComposerView: View {
     @Binding var draft: String
     @Binding var attachments: [Attachment]
     @Binding var agentEnabled: Bool
+    @Binding var dangerousMode: Bool
     @Binding var workingDirectory: String?
+    let undoCount: Int
     let isSending: Bool
     let canSend: Bool
     let onSend: () -> Void
     let onStop: () -> Void
+    let onShowUndo: () -> Void
 
     @Environment(\.appTheme) private var theme
     @FocusState private var isFocused: Bool
@@ -123,6 +126,42 @@ struct ChatComposerView: View {
                     .help(agentEnabled
                         ? "Agent mode ON — click to disable"
                         : "Enable agent mode (or type /agent <path>)")
+
+                    // Dangerous mode toggle (only shown when agent is enabled)
+                    if agentEnabled {
+                        Button {
+                            dangerousMode.toggle()
+                        } label: {
+                            Image(systemName: dangerousMode ? "bolt.fill" : "bolt")
+                                .font(.system(size: 13))
+                                .foregroundStyle(dangerousMode ? Color.red : theme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help(dangerousMode
+                            ? "Dangerous mode ON — auto-approves all tools. Click to disable"
+                            : "Enable dangerous mode — auto-approve tools (changes can be reverted)")
+                    }
+
+                    // Undo history button (shown when there are tracked changes)
+                    if undoCount > 0 {
+                        Button {
+                            onShowUndo()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.uturn.backward")
+                                    .font(.system(size: 11))
+                                Text("\(undoCount)")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(.orange.opacity(0.1), in: Capsule())
+                            .overlay(Capsule().stroke(.orange.opacity(0.3), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                        .help("View change history (\(undoCount) revertable)")
+                    }
 
                     // Working directory chip (shown when agent mode is on)
                     if agentEnabled, let dir = workingDirectory {

@@ -516,6 +516,34 @@ enum AgentToolError: LocalizedError {
     }
 }
 
+// MARK: - Undo Entry (Dangerous Mode)
+
+/// Tracks a file change made by an agent tool so it can be reverted.
+struct UndoEntry: Identifiable {
+    let id = UUID()
+    let timestamp: Date
+    let toolName: String       // write_file, edit_file, run_command
+    let filePath: String       // relative path
+    let fullPath: String       // absolute path
+    let previousContent: String? // nil if file didn't exist (new file)
+    let newContent: String     // content after the change
+    let summary: String        // human-readable description
+    var isReverted: Bool = false
+
+    /// Revert this change: restore previous content or delete the file if it was newly created.
+    func revert() throws {
+        if let previous = previousContent {
+            // File existed before — restore old content
+            try previous.write(toFile: fullPath, atomically: true, encoding: .utf8)
+        } else {
+            // File was newly created — delete it
+            if FileManager.default.fileExists(atPath: fullPath) {
+                try FileManager.default.removeItem(atPath: fullPath)
+            }
+        }
+    }
+}
+
 // MARK: - Pending Tool Confirmation
 
 /// Holds state for a destructive tool call awaiting user confirmation.

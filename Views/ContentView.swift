@@ -53,6 +53,8 @@ struct ContentView: View {
     @State private var agentToolExecutor = AgentToolExecutor()
     @State private var pendingToolConfirmation: PendingToolConfirmation?
     @State private var isShowingAgentDirectoryPicker = false
+    @State private var undoHistoryByThread: [UUID: [UndoEntry]] = [:]
+    @State private var isShowingUndoPanel = false
     @StateObject private var mcpManager = MCPManager.shared
     @EnvironmentObject private var themeManager: ThemeManager
     @Environment(\.appTheme) private var theme
@@ -102,6 +104,14 @@ struct ContentView: View {
         return threads[idx].messages
     }
 
+    /// Undo history for the currently selected thread.
+    private var undoHistory: [UndoEntry] {
+        get {
+            guard let id = selectedThreadID else { return [] }
+            return undoHistoryByThread[id] ?? []
+        }
+    }
+
     /// Binding to the selected thread's agentEnabled flag.
     private var agentEnabledBinding: Binding<Bool> {
         Binding(
@@ -126,6 +136,20 @@ struct ContentView: View {
             set: { newValue in
                 guard let idx = selectedThreadIndex else { return }
                 threads[idx].workingDirectory = newValue
+            }
+        )
+    }
+
+    /// Binding to the selected thread's dangerous mode flag.
+    private var dangerousModeBinding: Binding<Bool> {
+        Binding(
+            get: {
+                guard let idx = selectedThreadIndex else { return false }
+                return threads[idx].dangerousMode
+            },
+            set: { newValue in
+                guard let idx = selectedThreadIndex else { return }
+                threads[idx].dangerousMode = newValue
             }
         )
     }
@@ -262,13 +286,17 @@ struct ContentView: View {
                     draft: $draft,
                     attachments: $pendingAttachments,
                     agentEnabled: agentEnabledBinding,
+                    dangerousMode: dangerousModeBinding,
                     workingDirectory: workingDirectoryBinding,
+                    undoCount: undoHistory.filter { !$0.isReverted }.count,
                     isSending: isSending,
                     canSend: canSend
                 ) {
                     startSend()
                 } onStop: {
                     stopStreaming()
+                } onShowUndo: {
+                    isShowingUndoPanel = true
                 }
             }
             .background(theme.background)
@@ -382,6 +410,12 @@ struct ContentView: View {
             // Agent tool confirmation overlay
             if let confirmation = pendingToolConfirmation {
                 toolConfirmationOverlay(confirmation)
+            }
+        }
+        .overlay {
+            // Undo history panel
+            if isShowingUndoPanel {
+                undoPanelOverlay
             }
         }
         .commandPaletteShortcut(isPresented: $isCommandPaletteOpen)
@@ -1127,8 +1161,11 @@ struct ContentView: View {
 
                         if AgentTools.isBuiltIn(serverName: tc.serverName) {
                             // Built-in agent tool
-                            if AgentTools.isDestructive(tc.name) {
-                                // Destructive tool — ask for user confirmation
+                            let isDangerous = AgentTools.isDestructive(tc.name)
+                            let isDangerousMode = isAgent && threads[threads.firstIndex(where: { $0.id == threadID })!].dangerousMode
+
+                            if isDangerous && !isDangerousMode {
+                                // Normal mode: destructive tool — ask for user confirmation
                                 let approved = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
                                     pendingToolConfirmation = PendingToolConfirmation(
                                         toolName: tc.name,
@@ -1140,17 +1177,38 @@ struct ContentView: View {
                                 }
 
                                 if approved {
+                                    // Snapshot before execution for undo
+                                    let undoEntry = captureBeforeState(toolName: tc.name, arguments: args, workDir: workDir ?? ".")
                                     do {
                                         toolResultText = try await agentToolExecutor.execute(
                                             toolName: tc.name,
                                             arguments: args,
                                             workingDirectory: workDir ?? "."
                                         )
+                                        // Finalize undo entry with the new content
+                                        if let entry = finalizeUndoEntry(undoEntry, toolName: tc.name, arguments: args, workDir: workDir ?? ".") {
+                                            undoHistoryByThread[threadID, default: []].append(entry)
+                                        }
                                     } catch {
                                         toolResultText = "Error: \(error.localizedDescription)"
                                     }
                                 } else {
                                     toolResultText = "User denied this operation."
+                                }
+                            } else if isDangerous && isDangerousMode {
+                                // Dangerous mode: auto-approve, but capture undo state
+                                let undoEntry = captureBeforeState(toolName: tc.name, arguments: args, workDir: workDir ?? ".")
+                                do {
+                                    toolResultText = try await agentToolExecutor.execute(
+                                        toolName: tc.name,
+                                        arguments: args,
+                                        workingDirectory: workDir ?? "."
+                                    )
+                                    if let entry = finalizeUndoEntry(undoEntry, toolName: tc.name, arguments: args, workDir: workDir ?? ".") {
+                                        undoHistoryByThread[threadID, default: []].append(entry)
+                                    }
+                                } catch {
+                                    toolResultText = "Error: \(error.localizedDescription)"
                                 }
                             } else {
                                 // Non-destructive tool — auto-execute
@@ -1636,6 +1694,357 @@ struct ContentView: View {
         case "edit_file": return "pencil.line"
         case "run_command": return "terminal"
         default: return "exclamationmark.triangle"
+        }
+    }
+
+    // MARK: - Dangerous Mode: Undo Tracking
+
+    /// Captures the state of a file before a destructive tool modifies it.
+    /// Returns a partial tuple that will be finalized after execution.
+    private func captureBeforeState(toolName: String, arguments: [String: Any], workDir: String) -> (filePath: String, fullPath: String, previousContent: String?)? {
+        guard let path = arguments["path"] as? String else {
+            // run_command doesn't have a single file path — skip undo for commands
+            return nil
+        }
+
+        let fullPath: String
+        if path.hasPrefix("/") {
+            fullPath = path
+        } else {
+            fullPath = (workDir as NSString).appendingPathComponent(path)
+        }
+
+        let previousContent: String?
+        if FileManager.default.fileExists(atPath: fullPath) {
+            previousContent = try? String(contentsOfFile: fullPath, encoding: .utf8)
+        } else {
+            previousContent = nil
+        }
+
+        return (filePath: path, fullPath: fullPath, previousContent: previousContent)
+    }
+
+    /// Reads the file after execution and creates a finalized UndoEntry.
+    private func finalizeUndoEntry(_ before: (filePath: String, fullPath: String, previousContent: String?)?, toolName: String, arguments: [String: Any], workDir: String) -> UndoEntry? {
+        guard let before = before else { return nil }
+
+        let newContent: String
+        if let content = try? String(contentsOfFile: before.fullPath, encoding: .utf8) {
+            newContent = content
+        } else {
+            newContent = "(binary or unreadable)"
+        }
+
+        let summary: String
+        switch toolName {
+        case "write_file":
+            if before.previousContent == nil {
+                summary = "Created \(before.filePath)"
+            } else {
+                summary = "Overwrote \(before.filePath)"
+            }
+        case "edit_file":
+            let oldText = arguments["old_text"] as? String ?? ""
+            let newText = arguments["new_text"] as? String ?? ""
+            let oldLines = oldText.components(separatedBy: "\n").count
+            let newLines = newText.components(separatedBy: "\n").count
+            summary = "Edited \(before.filePath): \(oldLines) -> \(newLines) lines"
+        default:
+            summary = "\(toolName) on \(before.filePath)"
+        }
+
+        return UndoEntry(
+            timestamp: .now,
+            toolName: toolName,
+            filePath: before.filePath,
+            fullPath: before.fullPath,
+            previousContent: before.previousContent,
+            newContent: newContent,
+            summary: summary
+        )
+    }
+
+    // MARK: - Undo Panel Overlay
+
+    @ViewBuilder
+    private var undoPanelOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.4)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    isShowingUndoPanel = false
+                }
+
+            VStack(spacing: 0) {
+                // Header
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.uturn.backward.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundStyle(theme.accent)
+
+                    Text("Change History")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(theme.textPrimary)
+
+                    Spacer()
+
+                    let activeCount = undoHistory.filter { !$0.isReverted }.count
+                    if activeCount > 0 {
+                        Text("\(activeCount) change\(activeCount == 1 ? "" : "s")")
+                            .font(.system(size: 11))
+                            .foregroundStyle(theme.textTertiary)
+                    }
+
+                    Button {
+                        isShowingUndoPanel = false
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(theme.textTertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
+
+                theme.divider.frame(height: 1)
+
+                if undoHistory.isEmpty {
+                    // Empty state
+                    VStack(spacing: 12) {
+                        Spacer()
+                        Image(systemName: "checkmark.circle")
+                            .font(.system(size: 32, weight: .thin))
+                            .foregroundStyle(theme.textTertiary)
+                        Text("No changes yet")
+                            .font(.system(size: 13))
+                            .foregroundStyle(theme.textSecondary)
+                        Text("File changes made in dangerous mode will appear here")
+                            .font(.system(size: 11))
+                            .foregroundStyle(theme.textTertiary)
+                            .multilineTextAlignment(.center)
+                        Spacer()
+                    }
+                    .frame(maxHeight: 200)
+                } else {
+                    // Change list
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(Array(undoHistory.reversed().enumerated()), id: \.element.id) { _, entry in
+                                undoEntryRow(entry)
+
+                                theme.divider
+                                    .frame(height: 1)
+                                    .padding(.horizontal, 12)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 400)
+                }
+
+                theme.divider.frame(height: 1)
+
+                // Footer actions
+                HStack(spacing: 10) {
+                    let revertableCount = undoHistory.filter { !$0.isReverted }.count
+
+                    Button {
+                        revertAllChanges()
+                    } label: {
+                        Text("Revert All (\(revertableCount))")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(revertableCount > 0 ? Color.red : theme.textTertiary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(
+                                revertableCount > 0 ? Color.red.opacity(0.1) : theme.composerBackground,
+                                in: RoundedRectangle(cornerRadius: 8)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(revertableCount > 0 ? Color.red.opacity(0.3) : theme.composerBorder, lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(revertableCount == 0)
+
+                    Spacer()
+
+                    Button {
+                        if let id = selectedThreadID {
+                            undoHistoryByThread[id] = nil
+                        }
+                        isShowingUndoPanel = false
+                    } label: {
+                        Text("Clear History")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(theme.textSecondary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(theme.composerBackground, in: RoundedRectangle(cornerRadius: 8))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(theme.composerBorder, lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        isShowingUndoPanel = false
+                    } label: {
+                        Text("Done")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 7)
+                            .background(theme.accent, in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.escape, modifiers: [])
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+            }
+            .frame(width: 560)
+            .background(theme.background, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(theme.composerBorder, lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.3), radius: 20, y: 5)
+        }
+    }
+
+    private func undoEntryRow(_ entry: UndoEntry) -> some View {
+        HStack(spacing: 10) {
+            // Icon
+            Image(systemName: undoEntryIcon(entry))
+                .font(.system(size: 12))
+                .foregroundStyle(entry.isReverted ? theme.textTertiary : undoEntryColor(entry))
+                .frame(width: 20)
+
+            // Info
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.summary)
+                    .font(.system(size: 13))
+                    .foregroundStyle(entry.isReverted ? theme.textTertiary : theme.textPrimary)
+                    .strikethrough(entry.isReverted)
+                    .lineLimit(1)
+
+                HStack(spacing: 6) {
+                    Text(entry.filePath)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(theme.textTertiary)
+                        .lineLimit(1)
+
+                    Text(formatTimestamp(entry.timestamp))
+                        .font(.system(size: 10))
+                        .foregroundStyle(theme.textTertiary)
+                }
+            }
+
+            Spacer()
+
+            // Revert button
+            if !entry.isReverted {
+                Button {
+                    revertEntry(entry)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.uturn.backward")
+                            .font(.system(size: 10))
+                        Text("Revert")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(.orange.opacity(0.3), lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
+            } else {
+                Text("Reverted")
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.textTertiary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private func undoEntryIcon(_ entry: UndoEntry) -> String {
+        switch entry.toolName {
+        case "write_file":
+            return entry.previousContent == nil ? "doc.badge.plus" : "doc.badge.arrow.up"
+        case "edit_file":
+            return "pencil.line"
+        default:
+            return "terminal"
+        }
+    }
+
+    private func undoEntryColor(_ entry: UndoEntry) -> Color {
+        switch entry.toolName {
+        case "write_file":
+            return entry.previousContent == nil ? .green : .orange
+        case "edit_file":
+            return .blue
+        default:
+            return .purple
+        }
+    }
+
+    private func formatTimestamp(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter.string(from: date)
+    }
+
+    private func revertEntry(_ entry: UndoEntry) {
+        guard let threadID = selectedThreadID,
+              var entries = undoHistoryByThread[threadID],
+              let index = entries.firstIndex(where: { $0.id == entry.id }) else { return }
+        do {
+            try entry.revert()
+            entries[index].isReverted = true
+            undoHistoryByThread[threadID] = entries
+            toastManager.show(.success("Reverted: \(entry.summary)", icon: "arrow.uturn.backward"))
+        } catch {
+            toastManager.show(.error("Failed to revert: \(error.localizedDescription)"))
+        }
+    }
+
+    private func revertAllChanges() {
+        guard let threadID = selectedThreadID,
+              var entries = undoHistoryByThread[threadID] else { return }
+        var revertedCount = 0
+        var failedCount = 0
+
+        // Revert in reverse order (newest first)
+        for index in entries.indices.reversed() {
+            guard !entries[index].isReverted else { continue }
+            do {
+                try entries[index].revert()
+                entries[index].isReverted = true
+                revertedCount += 1
+            } catch {
+                failedCount += 1
+            }
+        }
+
+        undoHistoryByThread[threadID] = entries
+
+        if failedCount == 0 {
+            toastManager.show(.success("Reverted \(revertedCount) change\(revertedCount == 1 ? "" : "s")", icon: "arrow.uturn.backward"))
+        } else {
+            toastManager.show(.error("Reverted \(revertedCount), failed \(failedCount)"))
         }
     }
 }
