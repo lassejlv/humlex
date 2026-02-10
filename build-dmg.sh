@@ -93,6 +93,12 @@ cat > "${CONTENTS_DIR}/Info.plist" <<PLIST
     <string>14.0</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>SUFeedURL</key>
+    <string>https://raw.githubusercontent.com/lassejlv/humlex/main/docs/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>8kpw38a9r7rrVsa9d5bhzEDZGoYX4yffaWedaydM/pA=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
 </dict>
 </plist>
 PLIST
