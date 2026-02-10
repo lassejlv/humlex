@@ -140,8 +140,8 @@ private func buildGeminiContents(from history: [LLMChatMessage]) -> [GeminiStrea
             // These will be flushed as a single "user" content entry before the next message.
             guard let toolResult = msg.toolResult else { continue }
 
-            let responseContent: [String: AnyCodable] = [
-                "result": AnyCodable(msg.content)
+            let responseContent: [String: Any] = [
+                "result": msg.content
             ]
             pendingToolResponses.append(Part(
                 text: nil,
