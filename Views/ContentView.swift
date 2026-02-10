@@ -707,6 +707,18 @@ struct ContentView: View {
             return VercelAIAdapter()
         case .gemini:
             return GeminiAdapter()
+        case .claudeCode:
+            var adapter = ClaudeCodeAdapter()
+            if let idx = selectedThreadIndex {
+                adapter.workingDirectory = threads[idx].workingDirectory
+            }
+            return adapter
+        case .openAICodex:
+            var adapter = OpenAICodexAdapter()
+            if let idx = selectedThreadIndex {
+                adapter.workingDirectory = threads[idx].workingDirectory
+            }
+            return adapter
         }
     }
 
@@ -722,6 +734,10 @@ struct ContentView: View {
             return vercelAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         case .gemini:
             return geminiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .claudeCode:
+            return "claude-code"  // Sentinel value — Claude Code authenticates via CLI
+        case .openAICodex:
+            return "codex"  // Sentinel value — Codex authenticates via CLI
         }
     }
 
@@ -793,7 +809,7 @@ struct ContentView: View {
         let threadID = threads[idx].id
         let key = apiKey(for: selectedModel.provider)
 
-        guard !key.isEmpty else {
+        guard !key.isEmpty || !selectedModel.provider.requiresAPIKey else {
             statusMessage = "Missing \(selectedModel.provider.rawValue) API key."
             return
         }
@@ -866,7 +882,7 @@ struct ContentView: View {
 
         for provider in AIProvider.allCases {
             let key = apiKey(for: provider)
-            guard !key.isEmpty else { continue }
+            guard !key.isEmpty || !provider.requiresAPIKey else { continue }
 
             do {
                 let providerModels = try await adapter(for: provider).fetchModels(apiKey: key)
@@ -929,7 +945,7 @@ struct ContentView: View {
         let threadID = threads[idx].id
         let key = apiKey(for: selectedModel.provider)
 
-        guard !key.isEmpty else {
+        guard !key.isEmpty || !selectedModel.provider.requiresAPIKey else {
             statusMessage = "Missing \(selectedModel.provider.rawValue) API key."
             return
         }
@@ -1048,9 +1064,13 @@ struct ContentView: View {
         var previousToolCallSignature: String? = nil
 
         // Merge tools: MCP tools + built-in agent tools (if agent mode is on)
-        let availableTools: [MCPTool] = isAgent
-            ? mcpManager.tools + AgentTools.definitions()
-            : mcpManager.tools
+        // Claude Code and Codex handle their own tools internally — don't pass ours
+        let isCLIProvider = model.provider == .claudeCode || model.provider == .openAICodex
+        let availableTools: [MCPTool] = isCLIProvider
+            ? []
+            : (isAgent
+                ? mcpManager.tools + AgentTools.definitions()
+                : mcpManager.tools)
 
         for _ in 0..<maxToolIterations {
             // Build history from current thread messages

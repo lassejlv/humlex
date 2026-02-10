@@ -6,6 +6,8 @@ enum AIProvider: String, CaseIterable, Identifiable, Hashable {
     case openRouter = "OpenRouter"
     case vercelAI = "Vercel AI"
     case gemini = "Gemini"
+    case claudeCode = "Claude Code"
+    case openAICodex = "OpenAI Codex"
 
     var id: String { rawValue }
 
@@ -21,6 +23,18 @@ enum AIProvider: String, CaseIterable, Identifiable, Hashable {
             return "vercel_ai_api_key"
         case .gemini:
             return "gemini_api_key"
+        case .claudeCode:
+            return "claude_code_config"
+        case .openAICodex:
+            return "openai_codex_config"
+        }
+    }
+
+    /// Whether this provider requires a traditional API key.
+    var requiresAPIKey: Bool {
+        switch self {
+        case .claudeCode, .openAICodex: return false
+        default: return true
         }
     }
 }

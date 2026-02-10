@@ -36,6 +36,9 @@ struct SettingsView: View {
 
     @State private var selectedTab: SettingsTab = .providers
     @State private var selectedProvider: AIProvider = .openAI
+    @State private var claudeCodeAvailability: ClaudeCodeAvailability?
+    @State private var codexAvailability: CodexAvailability?
+    @State private var isLoggingIntoCodex = false
 
     // MCP add server form
     @State private var showAddServerForm = false
@@ -166,7 +169,15 @@ struct SettingsView: View {
 
     private func providerRow(_ provider: AIProvider) -> some View {
         let isSelected = selectedTab == .providers && selectedProvider == provider
-        let hasKey = !apiKeyBinding(for: provider).wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasKey: Bool = {
+            if provider == .claudeCode {
+                return claudeCodeAvailability?.isAvailable == true
+            }
+            if provider == .openAICodex {
+                return codexAvailability?.isAvailable == true
+            }
+            return !apiKeyBinding(for: provider).wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }()
 
         return Button {
             selectedTab = .providers
@@ -246,13 +257,296 @@ struct SettingsView: View {
 
             // Fields
             VStack(alignment: .leading, spacing: 20) {
-                apiKeyField
+                if selectedProvider == .claudeCode {
+                    claudeCodeDetailView
+                } else if selectedProvider == .openAICodex {
+                    codexDetailView
+                } else {
+                    apiKeyField
+                }
             }
             .padding(.horizontal, 24)
 
             Spacer()
         }
         .frame(maxWidth: .infinity)
+        .onAppear {
+            if selectedProvider == .claudeCode {
+                checkClaudeCodeAvailability()
+            } else if selectedProvider == .openAICodex {
+                checkCodexAvailability()
+            }
+        }
+        .onChange(of: selectedProvider) { _, newValue in
+            if newValue == .claudeCode {
+                checkClaudeCodeAvailability()
+            } else if newValue == .openAICodex {
+                checkCodexAvailability()
+            }
+        }
+    }
+
+    // MARK: - Claude Code Detail
+
+    private var claudeCodeDetailView: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // CLI Status
+            VStack(alignment: .leading, spacing: 8) {
+                Text("CLI Status")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(theme.textSecondary)
+
+                HStack(spacing: 10) {
+                    if let availability = claudeCodeAvailability {
+                        Circle()
+                            .fill(availability.isAvailable ? Color.green : Color.red)
+                            .frame(width: 8, height: 8)
+
+                        Text(availability.statusMessage)
+                            .font(.system(size: 13))
+                            .foregroundStyle(theme.textPrimary)
+                    } else {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Checking CLI availability...")
+                            .font(.system(size: 13))
+                            .foregroundStyle(theme.textSecondary)
+                    }
+
+                    Spacer()
+
+                    Button {
+                        checkClaudeCodeAvailability()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.textSecondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Re-check CLI availability")
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(theme.surfaceBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(theme.composerBorder, lineWidth: 1)
+                )
+            }
+
+            // Install instructions
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Setup")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(theme.textSecondary)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Claude Code authenticates via the CLI itself — no API key needed.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.textSecondary)
+
+                    HStack(spacing: 6) {
+                        Text("Install:")
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.textSecondary)
+
+                        Text("npm install -g @anthropic-ai/claude-code")
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(theme.textPrimary)
+                            .textSelection(.enabled)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(theme.codeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(theme.codeBorder, lineWidth: 1)
+                )
+            }
+        }
+    }
+
+    private func checkClaudeCodeAvailability() {
+        claudeCodeAvailability = nil
+        Task {
+            let result = await ClaudeCodeAvailability.check()
+            await MainActor.run {
+                claudeCodeAvailability = result
+            }
+        }
+    }
+
+    // MARK: - OpenAI Codex Detail
+
+    private var codexDetailView: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // CLI Status
+            VStack(alignment: .leading, spacing: 8) {
+                Text("CLI Status")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(theme.textSecondary)
+
+                HStack(spacing: 10) {
+                    if let availability = codexAvailability {
+                        Circle()
+                            .fill(availability.isAvailable ? Color.green : Color.red)
+                            .frame(width: 8, height: 8)
+
+                        Text(availability.statusMessage)
+                            .font(.system(size: 13))
+                            .foregroundStyle(theme.textPrimary)
+                    } else {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Checking CLI availability...")
+                            .font(.system(size: 13))
+                            .foregroundStyle(theme.textSecondary)
+                    }
+
+                    Spacer()
+
+                    Button {
+                        checkCodexAvailability()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.textSecondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Re-check CLI availability")
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(theme.surfaceBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(theme.composerBorder, lineWidth: 1)
+                )
+            }
+
+            // Authentication
+            if let availability = codexAvailability, availability.isAvailable {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Authentication")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(theme.textSecondary)
+
+                    HStack(spacing: 10) {
+                        if availability.isLoggedIn {
+                            Circle()
+                                .fill(Color.green)
+                                .frame(width: 8, height: 8)
+                            Text("Logged in via ChatGPT")
+                                .font(.system(size: 13))
+                                .foregroundStyle(theme.textPrimary)
+                        } else {
+                            Circle()
+                                .fill(Color.orange)
+                                .frame(width: 8, height: 8)
+                            Text("Not logged in")
+                                .font(.system(size: 13))
+                                .foregroundStyle(theme.textPrimary)
+                        }
+
+                        Spacer()
+
+                        if !availability.isLoggedIn {
+                            Button {
+                                loginToCodex()
+                            } label: {
+                                HStack(spacing: 4) {
+                                    if isLoggingIntoCodex {
+                                        ProgressView()
+                                            .controlSize(.mini)
+                                    }
+                                    Text(isLoggingIntoCodex ? "Logging in..." : "Login with ChatGPT")
+                                        .font(.system(size: 12, weight: .medium))
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .disabled(isLoggingIntoCodex)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(theme.surfaceBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(theme.composerBorder, lineWidth: 1)
+                    )
+                }
+            }
+
+            // Install instructions
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Setup")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(theme.textSecondary)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("OpenAI Codex uses your ChatGPT Plus or Pro subscription — no API key needed.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.textSecondary)
+
+                    HStack(spacing: 6) {
+                        Text("Install:")
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.textSecondary)
+
+                        Text("npm install -g @openai/codex")
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(theme.textPrimary)
+                            .textSelection(.enabled)
+                    }
+
+                    HStack(spacing: 6) {
+                        Text("Or:")
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.textSecondary)
+
+                        Text("brew install --cask codex")
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(theme.textPrimary)
+                            .textSelection(.enabled)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(theme.codeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(theme.codeBorder, lineWidth: 1)
+                )
+            }
+        }
+    }
+
+    private func checkCodexAvailability() {
+        codexAvailability = nil
+        Task {
+            let result = await CodexAvailability.check()
+            await MainActor.run {
+                codexAvailability = result
+            }
+        }
+    }
+
+    private func loginToCodex() {
+        isLoggingIntoCodex = true
+        Task {
+            let success = await CodexAvailability.performLogin()
+            await MainActor.run {
+                isLoggingIntoCodex = false
+                if success {
+                    // Refresh availability to pick up new login status
+                    checkCodexAvailability()
+                }
+            }
+        }
     }
 
     private var apiKeyField: some View {
@@ -283,7 +577,15 @@ struct SettingsView: View {
     @ViewBuilder
     private var statusBadge: some View {
         let count = modelCounts[selectedProvider] ?? 0
-        let hasKey = !apiKeyBinding(for: selectedProvider).wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasKey: Bool = {
+            if selectedProvider == .claudeCode {
+                return claudeCodeAvailability?.isAvailable == true
+            }
+            if selectedProvider == .openAICodex {
+                return codexAvailability?.isAvailable == true
+            }
+            return !apiKeyBinding(for: selectedProvider).wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }()
 
         if count > 0 {
             HStack(spacing: 4) {
@@ -900,6 +1202,8 @@ struct SettingsView: View {
         case .openRouter: return $openRouterAPIKey
         case .vercelAI: return $vercelAIAPIKey
         case .gemini: return $geminiAPIKey
+        case .claudeCode: return .constant("")  // Claude Code doesn't use an API key
+        case .openAICodex: return .constant("")  // Codex doesn't use an API key
         }
     }
 }

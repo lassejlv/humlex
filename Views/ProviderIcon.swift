@@ -106,6 +106,8 @@ extension AIProvider {
         case .openRouter: return "openrouter"
         case .vercelAI: return "vercel"
         case .gemini: return "google"
+        case .claudeCode: return "anthropic"
+        case .openAICodex: return "openai"
         }
     }
 }
