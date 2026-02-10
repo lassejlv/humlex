@@ -8,7 +8,7 @@ let package = Package(
         .executableTarget(
             name: "AIChat",
             path: ".",
-            exclude: ["run.sh", "build-dmg.sh", "Assets.xcassets"],
+            exclude: ["run.sh", "build-dmg.sh", "Assets.xcassets", "README.md", ".github"],
             swiftSettings: [
                 .swiftLanguageMode(.v5)
             ]
