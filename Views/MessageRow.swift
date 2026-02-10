@@ -11,6 +11,7 @@ struct MessageRow: View {
     @Environment(\.toastManager) private var toast
     @State private var showActions = false
     @State private var hideTask: DispatchWorkItem?
+    @State private var toolResultExpanded = false
 
     init(
         message: ChatMessage,
@@ -128,17 +129,37 @@ struct MessageRow: View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(toolCalls, id: \.id) { tc in
                 let isBuiltIn = AgentTools.isBuiltIn(serverName: tc.serverName)
-                HStack(spacing: 6) {
-                    Image(systemName: isBuiltIn ? "terminal" : "wrench.and.screwdriver")
-                        .font(.system(size: 11))
-                        .foregroundStyle(isBuiltIn ? .orange : theme.accent)
-                    Text(isBuiltIn ? (AgentToolName(rawValue: tc.name)?.displayName ?? tc.name) : tc.name)
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                        .foregroundStyle(theme.textPrimary)
-                    if !tc.serverName.isEmpty {
-                        Text(isBuiltIn ? "Agent" : tc.serverName)
+                let args = parseToolArgs(tc.arguments)
+
+                VStack(alignment: .leading, spacing: 0) {
+                    // Main chip row
+                    HStack(spacing: 6) {
+                        Image(systemName: isBuiltIn ? toolCallIcon(tc.name) : "wrench.and.screwdriver")
                             .font(.system(size: 11))
-                            .foregroundStyle(theme.textTertiary)
+                            .foregroundStyle(isBuiltIn ? .orange : theme.accent)
+                        Text(isBuiltIn ? (AgentToolName(rawValue: tc.name)?.displayName ?? tc.name) : tc.name)
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .foregroundStyle(theme.textPrimary)
+
+                        // Inline argument summary
+                        if let summary = toolCallArgSummary(tc.name, args: args) {
+                            Text(summary)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(theme.textTertiary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+
+                        Spacer()
+
+                        if !tc.serverName.isEmpty {
+                            Text(isBuiltIn ? "Agent" : tc.serverName)
+                                .font(.system(size: 10))
+                                .foregroundStyle(theme.textTertiary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(theme.chipBackground, in: Capsule())
+                        }
                     }
                 }
                 .padding(.horizontal, 10)
@@ -153,77 +174,218 @@ struct MessageRow: View {
         .frame(maxWidth: 760, alignment: .leading)
     }
 
+    private func toolCallIcon(_ name: String) -> String {
+        switch name {
+        case "read_file": return "doc.text"
+        case "write_file": return "doc.badge.plus"
+        case "edit_file": return "pencil.line"
+        case "list_directory": return "folder"
+        case "search_files": return "doc.text.magnifyingglass"
+        case "run_command": return "terminal"
+        default: return "terminal"
+        }
+    }
+
+    private func parseToolArgs(_ json: String) -> [String: Any] {
+        guard let data = json.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return [:] }
+        return dict
+    }
+
+    private func toolCallArgSummary(_ name: String, args: [String: Any]) -> String? {
+        switch name {
+        case "read_file", "write_file", "edit_file":
+            return args["path"] as? String
+        case "list_directory":
+            let path = args["path"] as? String ?? "."
+            return path
+        case "search_files":
+            if let pattern = args["pattern"] as? String {
+                return "/\(pattern)/"
+            }
+            return nil
+        case "run_command":
+            if let cmd = args["command"] as? String {
+                // Show first 60 chars of command
+                if cmd.count > 60 {
+                    return String(cmd.prefix(60)) + "..."
+                }
+                return cmd
+            }
+            return nil
+        default:
+            return nil
+        }
+    }
+
     private var toolResultBlock: some View {
         let isBuiltIn = message.toolName.map { AgentToolName(rawValue: $0) != nil } ?? false
         let isCommand = message.toolName == "run_command"
-        let isFileRead = message.toolName == "read_file" || message.toolName == "search_files"
-        let isFileWrite = message.toolName == "write_file" || message.toolName == "edit_file"
+        let isFileRead = message.toolName == "read_file"
+        let isSearch = message.toolName == "search_files"
+        let isFileWrite = message.toolName == "write_file"
+        let isEdit = message.toolName == "edit_file"
+        let isListDir = message.toolName == "list_directory"
+        let isDenied = message.text == "User denied this operation."
+        let isError = message.text.hasPrefix("Error:")
+        let lines = message.text.components(separatedBy: "\n")
+        let lineCount = lines.count
 
-        return VStack(alignment: .leading, spacing: 4) {
-            // Header
-            HStack(spacing: 6) {
-                Image(systemName: isBuiltIn ? "terminal" : "arrow.turn.down.right")
-                    .font(.system(size: 11))
-                    .foregroundStyle(isBuiltIn ? .orange : theme.accent)
+        return VStack(alignment: .leading, spacing: 0) {
+            // Collapsible header
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    toolResultExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    // Expand/collapse chevron
+                    Image(systemName: toolResultExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(theme.textTertiary)
+                        .frame(width: 12)
 
-                if isBuiltIn, let name = message.toolName, let displayName = AgentToolName(rawValue: name)?.displayName {
-                    Text(displayName)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(theme.textSecondary)
-                } else {
-                    Text("Tool Result")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(theme.textSecondary)
-                    if let name = message.toolName {
-                        Text(name)
-                            .font(.system(size: 12, design: .monospaced))
+                    // Tool icon
+                    Image(systemName: toolResultIcon(for: message.toolName, isError: isError, isDenied: isDenied))
+                        .font(.system(size: 11))
+                        .foregroundStyle(toolResultIconColor(isError: isError, isDenied: isDenied, isBuiltIn: isBuiltIn))
+
+                    // Tool name
+                    if isBuiltIn, let name = message.toolName, let displayName = AgentToolName(rawValue: name)?.displayName {
+                        Text(displayName)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(theme.textSecondary)
+                    } else {
+                        Text("Tool Result")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(theme.textSecondary)
+                        if let name = message.toolName {
+                            Text(name)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(theme.textTertiary)
+                        }
+                    }
+
+                    // Inline status/summary
+                    if isDenied {
+                        Text("denied")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Color.red.opacity(0.7))
+                    } else if isError {
+                        Text("error")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Color.red.opacity(0.7))
+                    } else if isCommand {
+                        // Show exit code inline
+                        if let exitLine = lines.first, exitLine.hasPrefix("Exit code:") {
+                            let code = exitLine.replacingOccurrences(of: "Exit code: ", with: "").trimmingCharacters(in: .whitespaces)
+                            Text("exit \(code)")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(code == "0" ? Color.green.opacity(0.7) : Color.red.opacity(0.7))
+                        }
+                    } else if isFileRead || isSearch || isListDir {
+                        Text("\(lineCount) lines")
+                            .font(.system(size: 11))
                             .foregroundStyle(theme.textTertiary)
+                    } else if isFileWrite || isEdit {
+                        // Show the compact result inline
+                        Text(message.text.prefix(80))
+                            .font(.system(size: 11))
+                            .foregroundStyle(theme.textTertiary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            // Expanded content
+            if toolResultExpanded {
+                Group {
+                    if isDenied {
+                        Text("Operation was denied by user.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.red.opacity(0.7))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                    } else if isCommand {
+                        // Terminal-styled block
+                        Text(message.text)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(Color.green.opacity(0.85))
+                            .textSelection(.enabled)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.black.opacity(0.85))
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .stroke(Color.green.opacity(0.15), lineWidth: 1)
+                            )
+                            .padding(.horizontal, 10)
+                    } else if isFileWrite || isEdit {
+                        Text(message.text)
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.textSecondary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                    } else {
+                        // Code block for read_file, search_files, list_directory, MCP
+                        Text(message.text)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(theme.textSecondary)
+                            .textSelection(.enabled)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(theme.codeBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .stroke(theme.codeBorder, lineWidth: 1)
+                            )
+                            .padding(.horizontal, 10)
                     }
                 }
-            }
-
-            // Result content — styled by type
-            if isFileWrite {
-                // Compact confirmation for write/edit
-                Text(message.text)
-                    .font(.system(size: 12))
-                    .foregroundStyle(theme.textSecondary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .frame(maxWidth: 760, alignment: .leading)
-                    .background(theme.codeBackground.opacity(0.5), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            } else if isCommand {
-                // Terminal-styled block for run_command
-                Text(message.text)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(Color.green.opacity(0.85))
-                    .textSelection(.enabled)
-                    .lineLimit(12)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: 760, alignment: .leading)
-                    .background(Color.black.opacity(0.85), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Color.green.opacity(0.2), lineWidth: 1)
-                    )
-            } else {
-                // Default: code block for read_file/search_files/MCP results
-                Text(message.text)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(theme.textSecondary)
-                    .textSelection(.enabled)
-                    .lineLimit(isFileRead ? 15 : 8)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: 760, alignment: .leading)
-                    .background(theme.codeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(theme.codeBorder, lineWidth: 1)
-                    )
+                .padding(.bottom, 6)
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(theme.codeBackground.opacity(0.3))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(theme.codeBorder.opacity(0.5), lineWidth: 1)
+        )
+        .frame(maxWidth: 760, alignment: .leading)
+    }
+
+    private func toolResultIcon(for toolName: String?, isError: Bool, isDenied: Bool) -> String {
+        if isDenied { return "xmark.circle" }
+        if isError { return "exclamationmark.triangle" }
+        switch toolName {
+        case "read_file": return "doc.text"
+        case "write_file": return "doc.badge.plus"
+        case "edit_file": return "pencil.line"
+        case "list_directory": return "folder"
+        case "search_files": return "doc.text.magnifyingglass"
+        case "run_command": return "terminal"
+        default: return "arrow.turn.down.right"
+        }
+    }
+
+    private func toolResultIconColor(isError: Bool, isDenied: Bool, isBuiltIn: Bool) -> Color {
+        if isDenied || isError { return Color.red.opacity(0.7) }
+        return isBuiltIn ? .orange : theme.accent
     }
 
     private var actionButtons: some View {

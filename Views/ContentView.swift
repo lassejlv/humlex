@@ -1134,7 +1134,8 @@ struct ContentView: View {
                                         toolName: tc.name,
                                         arguments: args,
                                         displaySummary: PendingToolConfirmation.summary(toolName: tc.name, arguments: args),
-                                        continuation: continuation
+                                        continuation: continuation,
+                                        workingDirectory: workDir
                                     )
                                 }
 
@@ -1284,11 +1285,23 @@ struct ContentView: View {
                         .font(.system(size: 16))
                         .foregroundStyle(.orange)
 
-                    Text("Confirm Action")
+                    Text(confirmationTitle(for: confirmation))
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(theme.textPrimary)
 
                     Spacer()
+
+                    // File path badge
+                    if let path = confirmation.filePath {
+                        Text(path)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(theme.accent)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(theme.accent.opacity(0.1), in: Capsule())
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
@@ -1296,39 +1309,36 @@ struct ContentView: View {
 
                 theme.divider.frame(height: 1)
 
-                // Tool details
-                VStack(alignment: .leading, spacing: 8) {
-                    // Tool name
-                    HStack(spacing: 6) {
-                        Text("Tool:")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(theme.textSecondary)
-                        Text(AgentToolName(rawValue: confirmation.toolName)?.displayName ?? confirmation.toolName)
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(theme.accent)
+                // Content area — varies by tool type
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        switch confirmation.toolName {
+                        case "edit_file":
+                            editFileDiffView(confirmation)
+                        case "write_file":
+                            writeFilePreview(confirmation)
+                        case "run_command":
+                            runCommandPreview(confirmation)
+                        default:
+                            // Fallback
+                            Text(confirmation.displaySummary)
+                                .font(.system(size: 13, design: .monospaced))
+                                .foregroundStyle(theme.textPrimary)
+                                .padding(12)
+                        }
                     }
-
-                    // Summary
-                    Text(confirmation.displaySummary)
-                        .font(.system(size: 13, design: .monospaced))
-                        .foregroundStyle(theme.textPrimary)
-                        .textSelection(.enabled)
-                        .lineLimit(6)
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(theme.codeBackground, in: RoundedRectangle(cornerRadius: 8))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(theme.codeBorder, lineWidth: 1)
-                        )
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                .frame(maxHeight: 360)
 
                 theme.divider.frame(height: 1)
 
                 // Action buttons
                 HStack(spacing: 10) {
+                    // Keyboard hint
+                    Text("Esc to deny, Return to allow")
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.textTertiary)
+
                     Spacer()
 
                     Button {
@@ -1368,7 +1378,7 @@ struct ContentView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }
-            .frame(width: 420)
+            .frame(width: 560)
             .background(theme.background, in: RoundedRectangle(cornerRadius: 12))
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
@@ -1376,6 +1386,248 @@ struct ContentView: View {
             )
             .shadow(color: .black.opacity(0.3), radius: 20, y: 5)
         }
+    }
+
+    // MARK: - Confirmation: edit_file diff view
+
+    @ViewBuilder
+    private func editFileDiffView(_ confirmation: PendingToolConfirmation) -> some View {
+        let oldText = confirmation.oldText ?? ""
+        let newText = confirmation.newText ?? ""
+        let oldLines = oldText.components(separatedBy: "\n")
+        let newLines = newText.components(separatedBy: "\n")
+
+        VStack(alignment: .leading, spacing: 0) {
+            // Diff header
+            HStack(spacing: 12) {
+                HStack(spacing: 4) {
+                    Image(systemName: "minus.circle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.red.opacity(0.8))
+                    Text("\(oldLines.count) line\(oldLines.count == 1 ? "" : "s") removed")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.red.opacity(0.8))
+                }
+                HStack(spacing: 4) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.green.opacity(0.8))
+                    Text("\(newLines.count) line\(newLines.count == 1 ? "" : "s") added")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.green.opacity(0.8))
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+
+            // Removed lines
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(oldLines.prefix(20).enumerated()), id: \.offset) { _, line in
+                    HStack(spacing: 0) {
+                        Text("- ")
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.red.opacity(0.7))
+                        Text(line)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(Color.red.opacity(0.85))
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.red.opacity(0.08))
+                }
+                if oldLines.count > 20 {
+                    Text("  ... +\(oldLines.count - 20) more lines")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(theme.textTertiary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 2)
+                }
+            }
+            .padding(.horizontal, 8)
+
+            // Separator
+            Rectangle()
+                .fill(theme.divider)
+                .frame(height: 1)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 4)
+
+            // Added lines
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(newLines.prefix(20).enumerated()), id: \.offset) { _, line in
+                    HStack(spacing: 0) {
+                        Text("+ ")
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.green.opacity(0.7))
+                        Text(line)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(Color.green.opacity(0.85))
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.green.opacity(0.08))
+                }
+                if newLines.count > 20 {
+                    Text("  ... +\(newLines.count - 20) more lines")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(theme.textTertiary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 2)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
+        }
+    }
+
+    // MARK: - Confirmation: write_file preview
+
+    @ViewBuilder
+    private func writeFilePreview(_ confirmation: PendingToolConfirmation) -> some View {
+        let content = confirmation.fileContent ?? ""
+        let lines = content.components(separatedBy: "\n")
+
+        VStack(alignment: .leading, spacing: 0) {
+            // Info bar
+            HStack(spacing: 8) {
+                Image(systemName: confirmation.isNewFile ? "doc.badge.plus" : "doc.badge.arrow.up")
+                    .font(.system(size: 11))
+                    .foregroundStyle(confirmation.isNewFile ? Color.green.opacity(0.8) : .orange)
+                Text(confirmation.isNewFile ? "New file" : "Overwrite existing file")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(confirmation.isNewFile ? Color.green.opacity(0.8) : .orange)
+                Spacer()
+                Text("\(lines.count) lines, \(formatBytes(content.utf8.count))")
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.textTertiary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+
+            // File content preview
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(lines.prefix(25).enumerated()), id: \.offset) { idx, line in
+                    HStack(alignment: .top, spacing: 0) {
+                        Text("\(idx + 1)")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(theme.textTertiary)
+                            .frame(width: 32, alignment: .trailing)
+                            .padding(.trailing, 8)
+                        Text(line.isEmpty ? " " : line)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(theme.textPrimary)
+                            .lineLimit(1)
+                    }
+                    .padding(.vertical, 1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if lines.count > 25 {
+                    Text("  ... +\(lines.count - 25) more lines")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(theme.textTertiary)
+                        .padding(.leading, 40)
+                        .padding(.vertical, 2)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(theme.codeBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(theme.codeBorder, lineWidth: 1)
+            )
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
+        }
+    }
+
+    // MARK: - Confirmation: run_command preview
+
+    @ViewBuilder
+    private func runCommandPreview(_ confirmation: PendingToolConfirmation) -> some View {
+        let command = confirmation.command ?? ""
+
+        VStack(alignment: .leading, spacing: 0) {
+            // Working directory
+            if let workDir = threads[selectedThreadIndex ?? 0].workingDirectory {
+                HStack(spacing: 6) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.textTertiary)
+                    Text(abbreviatePathForToast(workDir))
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(theme.textSecondary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
+            }
+
+            // Command
+            HStack(alignment: .top, spacing: 8) {
+                Text("$")
+                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.green.opacity(0.7))
+                Text(command)
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(theme.textPrimary)
+                    .textSelection(.enabled)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.black.opacity(0.6))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.green.opacity(0.15), lineWidth: 1)
+            )
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+
+            // Warning for potentially dangerous commands
+            if commandLooksDangerous(command) {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange)
+                    Text("This command may modify or delete files")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange.opacity(0.8))
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+            }
+        }
+    }
+
+    private func commandLooksDangerous(_ command: String) -> Bool {
+        let dangerous = ["rm ", "rm\t", "rmdir", "sudo", "chmod", "chown", "mv ", "dd ",
+                         "> /", ">> /", "| sudo", "curl | sh", "curl | bash",
+                         "format", "mkfs", "kill ", "killall", "pkill"]
+        let lower = command.lowercased()
+        return dangerous.contains { lower.contains($0) }
+    }
+
+    private func confirmationTitle(for confirmation: PendingToolConfirmation) -> String {
+        switch confirmation.toolName {
+        case "edit_file": return "Edit File"
+        case "write_file": return confirmation.isNewFile ? "Create File" : "Overwrite File"
+        case "run_command": return "Run Command"
+        default: return "Confirm Action"
+        }
+    }
+
+    private func formatBytes(_ bytes: Int) -> String {
+        if bytes < 1024 { return "\(bytes) B" }
+        else if bytes < 1024 * 1024 { return "\(bytes / 1024) KB" }
+        else { return String(format: "%.1f MB", Double(bytes) / (1024 * 1024)) }
     }
 
     private func confirmationIcon(for toolName: String) -> String {

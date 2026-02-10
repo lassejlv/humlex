@@ -526,6 +526,49 @@ struct PendingToolConfirmation: Identifiable {
     let displaySummary: String
     let continuation: CheckedContinuation<Bool, Never>
 
+    // Rich data for the confirmation UI
+    let filePath: String?
+    let oldText: String?       // edit_file: text being replaced
+    let newText: String?       // edit_file: replacement text
+    let fileContent: String?   // write_file: content to write
+    let command: String?       // run_command: shell command
+    let isNewFile: Bool        // write_file: whether file is new or overwrite
+
+    init(
+        toolName: String,
+        arguments: [String: Any],
+        displaySummary: String,
+        continuation: CheckedContinuation<Bool, Never>,
+        workingDirectory: String? = nil
+    ) {
+        self.toolName = toolName
+        self.arguments = arguments
+        self.displaySummary = displaySummary
+        self.continuation = continuation
+
+        let path = arguments["path"] as? String
+        self.filePath = path
+        self.oldText = arguments["old_text"] as? String
+        self.newText = arguments["new_text"] as? String
+        self.fileContent = arguments["content"] as? String
+        self.command = arguments["command"] as? String
+
+        // Check if the file already exists for write_file
+        if toolName == "write_file", let path = path {
+            let fullPath: String
+            if path.hasPrefix("/") {
+                fullPath = path
+            } else if let wd = workingDirectory {
+                fullPath = (wd as NSString).appendingPathComponent(path)
+            } else {
+                fullPath = path
+            }
+            self.isNewFile = !FileManager.default.fileExists(atPath: fullPath)
+        } else {
+            self.isNewFile = false
+        }
+    }
+
     /// Build a human-readable summary for the confirmation dialog.
     static func summary(toolName: String, arguments: [String: Any]) -> String {
         switch toolName {

@@ -1,6 +1,16 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// A file or folder entry for the @-mention popup.
+struct MentionEntry: Identifiable, Hashable {
+    let id = UUID()
+    let name: String
+    let relativePath: String   // path relative to workingDirectory
+    let fullPath: String
+    let isDirectory: Bool
+    let fileSize: Int
+}
+
 struct ChatComposerView: View {
     @Binding var draft: String
     @Binding var attachments: [Attachment]
@@ -16,6 +26,13 @@ struct ChatComposerView: View {
     @State private var isShowingFilePicker = false
     @State private var isShowingDirectoryPicker = false
 
+    // @-mention state
+    @State private var showMentionPopup = false
+    @State private var mentionQuery = ""           // text after the last '@'
+    @State private var mentionResults: [MentionEntry] = []
+    @State private var mentionSelectedIndex = 0
+    @State private var previousDraft = ""
+
     var body: some View {
         VStack(spacing: 0) {
             // Attachment chips
@@ -25,6 +42,11 @@ struct ChatComposerView: View {
 
             // Input row
             VStack(spacing: 0) {
+                // @-mention popup (floats above the text input)
+                if showMentionPopup && !mentionResults.isEmpty {
+                    mentionPopupView
+                }
+
                 // Text input
                 ZStack(alignment: .topLeading) {
                     TextEditor(text: $draft)
@@ -35,9 +57,12 @@ struct ChatComposerView: View {
                         .frame(minHeight: 20, maxHeight: 120)
                         .fixedSize(horizontal: false, vertical: true)
                         .focused($isFocused)
+                        .onChange(of: draft) { _, newValue in
+                            handleDraftChange(newValue)
+                        }
 
                     if draft.isEmpty && attachments.isEmpty {
-                        Text("Message (\u{21B5} to send) \u{2022} /agent <path> to enable agent mode")
+                        Text("Message (\u{21B5} to send) \u{2022} @ to mention files")
                             .font(.system(size: 14))
                             .foregroundStyle(theme.textTertiary)
                             .allowsHitTesting(false)
@@ -49,7 +74,7 @@ struct ChatComposerView: View {
                 .padding(.top, 10)
                 .padding(.bottom, 4)
 
-                // Bottom bar: attach + agent toggle + stop
+                // Bottom bar: attach + @ mention + agent toggle + stop
                 HStack(spacing: 8) {
                     Button {
                         isShowingFilePicker = true
@@ -60,6 +85,23 @@ struct ChatComposerView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Attach file (images, text, code)")
+
+                    // @ mention button
+                    Button {
+                        if workingDirectory != nil {
+                            // Insert @ at end of draft and trigger popup
+                            draft += "@"
+                        }
+                    } label: {
+                        Text("@")
+                            .font(.system(size: 15, weight: .medium, design: .monospaced))
+                            .foregroundStyle(workingDirectory != nil ? theme.textSecondary : theme.textTertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(workingDirectory == nil)
+                    .help(workingDirectory != nil
+                        ? "Mention a file from working directory"
+                        : "Set a working directory first to mention files")
 
                     // Agent mode toggle
                     Button {
@@ -137,9 +179,48 @@ struct ChatComposerView: View {
         .padding(.bottom, 16)
         .padding(.top, 8)
         .onKeyPress(.return, phases: .down) { keyPress in
+            if showMentionPopup && !mentionResults.isEmpty {
+                selectMention(mentionResults[mentionSelectedIndex])
+                return .handled
+            }
             if keyPress.modifiers.isEmpty && canSend {
                 onSend()
                 return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(.upArrow, phases: .down) { _ in
+            if showMentionPopup && !mentionResults.isEmpty {
+                mentionSelectedIndex = max(0, mentionSelectedIndex - 1)
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(.downArrow, phases: .down) { _ in
+            if showMentionPopup && !mentionResults.isEmpty {
+                mentionSelectedIndex = min(mentionResults.count - 1, mentionSelectedIndex + 1)
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(.escape, phases: .down) { _ in
+            if showMentionPopup {
+                dismissMentionPopup()
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(.tab, phases: .down) { _ in
+            if showMentionPopup && !mentionResults.isEmpty {
+                let entry = mentionResults[mentionSelectedIndex]
+                if entry.isDirectory {
+                    // Navigate into directory
+                    navigateIntoDirectory(entry)
+                    return .handled
+                } else {
+                    selectMention(entry)
+                    return .handled
+                }
             }
             return .ignored
         }
@@ -161,6 +242,310 @@ struct ChatComposerView: View {
             handleDrop(providers)
             return true
         }
+    }
+
+    // MARK: - @-mention popup view
+
+    private var mentionPopupView: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack {
+                Image(systemName: "doc.text.magnifyingglass")
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.textTertiary)
+                Text(mentionSubdirectoryLabel)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(theme.textSecondary)
+                Spacer()
+                Text("\(mentionResults.count) items")
+                    .font(.system(size: 10))
+                    .foregroundStyle(theme.textTertiary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+
+            Divider()
+                .foregroundStyle(theme.chipBorder)
+
+            ScrollViewReader { proxy in
+                ScrollView(.vertical, showsIndicators: true) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(mentionResults.enumerated()), id: \.element.id) { index, entry in
+                            mentionRow(entry, isSelected: index == mentionSelectedIndex)
+                                .id(entry.id)
+                                .onTapGesture {
+                                    if entry.isDirectory {
+                                        navigateIntoDirectory(entry)
+                                    } else {
+                                        selectMention(entry)
+                                    }
+                                }
+                        }
+                    }
+                }
+                .frame(maxHeight: 200)
+                .onChange(of: mentionSelectedIndex) { _, newIndex in
+                    if newIndex < mentionResults.count {
+                        withAnimation(.easeInOut(duration: 0.1)) {
+                            proxy.scrollTo(mentionResults[newIndex].id, anchor: .center)
+                        }
+                    }
+                }
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(theme.composerBackground)
+                .shadow(color: .black.opacity(0.2), radius: 8, y: -2)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(theme.composerBorder, lineWidth: 1)
+        )
+        .padding(.horizontal, 16)
+        .padding(.bottom, 4)
+    }
+
+    private func mentionRow(_ entry: MentionEntry, isSelected: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: entry.isDirectory ? "folder.fill" : fileIcon(for: entry.name))
+                .font(.system(size: 12))
+                .foregroundStyle(entry.isDirectory ? Color.blue : theme.textSecondary)
+                .frame(width: 16)
+
+            Text(entry.name)
+                .font(.system(size: 13))
+                .foregroundStyle(theme.textPrimary)
+                .lineLimit(1)
+
+            Spacer()
+
+            if entry.isDirectory {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9))
+                    .foregroundStyle(theme.textTertiary)
+            } else {
+                Text(fileSizeLabel(entry.fileSize))
+                    .font(.system(size: 10))
+                    .foregroundStyle(theme.textTertiary)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(isSelected ? theme.accent.opacity(0.12) : Color.clear)
+        .contentShape(Rectangle())
+    }
+
+    private var mentionSubdirectoryLabel: String {
+        // Extract subdirectory part from mentionQuery
+        let query = mentionQuery
+        if let lastSlash = query.lastIndex(of: "/") {
+            let subdir = String(query[query.startIndex...lastSlash])
+            return "./\(subdir)"
+        }
+        return "./"
+    }
+
+    private func fileIcon(for name: String) -> String {
+        let ext = (name as NSString).pathExtension.lowercased()
+        switch ext {
+        case "swift": return "swift"
+        case "py": return "doc.text"
+        case "js", "ts", "jsx", "tsx": return "doc.text"
+        case "json", "yml", "yaml", "toml": return "doc.text"
+        case "md": return "doc.richtext"
+        case "png", "jpg", "jpeg", "gif", "svg", "webp": return "photo"
+        case "sh", "bash", "zsh": return "terminal"
+        default: return "doc"
+        }
+    }
+
+    private func fileSizeLabel(_ size: Int) -> String {
+        if size < 1024 { return "\(size) B" }
+        else if size < 1024 * 1024 { return "\(size / 1024) KB" }
+        else { return String(format: "%.1f MB", Double(size) / (1024 * 1024)) }
+    }
+
+    // MARK: - @-mention logic
+
+    /// Called whenever the draft text changes. Detects '@' and extracts query.
+    private func handleDraftChange(_ newValue: String) {
+        previousDraft = newValue
+
+        guard workingDirectory != nil else {
+            if showMentionPopup { dismissMentionPopup() }
+            return
+        }
+
+        // Find the last '@' in the draft that isn't preceded by a word character (or is at start)
+        guard let atIndex = findActiveMentionAtIndex(in: newValue) else {
+            if showMentionPopup { dismissMentionPopup() }
+            return
+        }
+
+        // Extract query text after '@'
+        let queryStart = newValue.index(after: atIndex)
+        let query = String(newValue[queryStart...])
+
+        // If query contains a space, the mention is complete — dismiss
+        if query.contains(" ") || query.contains("\n") {
+            if showMentionPopup { dismissMentionPopup() }
+            return
+        }
+
+        mentionQuery = query
+        mentionSelectedIndex = 0
+        updateMentionResults()
+        showMentionPopup = true
+    }
+
+    /// Finds the index of the '@' character that initiated the current mention.
+    /// Returns nil if no active mention context is found.
+    private func findActiveMentionAtIndex(in text: String) -> String.Index? {
+        // Walk backwards from end to find the last '@'
+        guard let atRange = text.range(of: "@", options: .backwards) else { return nil }
+        let atIndex = atRange.lowerBound
+
+        // Check that there's no space or newline between '@' and end of text
+        let afterAt = text[text.index(after: atIndex)...]
+        if afterAt.contains(" ") || afterAt.contains("\n") {
+            return nil
+        }
+
+        // '@' should be at start of text or preceded by a space/newline
+        if atIndex == text.startIndex { return atIndex }
+        let charBefore = text[text.index(before: atIndex)]
+        if charBefore == " " || charBefore == "\n" || charBefore == "\t" {
+            return atIndex
+        }
+
+        return nil
+    }
+
+    /// Lists files from the working directory, filtered by mentionQuery.
+    private func updateMentionResults() {
+        guard let workDir = workingDirectory else {
+            mentionResults = []
+            return
+        }
+
+        let fm = FileManager.default
+
+        // Determine base directory and filter text
+        var basePath = workDir
+        var filterText = mentionQuery
+
+        // Support subdirectory traversal: if query contains '/', split into path + filter
+        if let lastSlash = mentionQuery.lastIndex(of: "/") {
+            let subdir = String(mentionQuery[mentionQuery.startIndex..<lastSlash])
+            filterText = String(mentionQuery[mentionQuery.index(after: lastSlash)...])
+
+            // Resolve subdirectory relative to workDir
+            let resolvedSub = (workDir as NSString).appendingPathComponent(subdir)
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: resolvedSub, isDirectory: &isDir), isDir.boolValue {
+                basePath = resolvedSub
+            } else {
+                mentionResults = []
+                return
+            }
+        }
+
+        // List directory contents
+        guard let contents = try? fm.contentsOfDirectory(atPath: basePath) else {
+            mentionResults = []
+            return
+        }
+
+        // Hidden files/directories and common noise to skip
+        let skipDirs: Set<String> = [".git", ".build", "node_modules", ".DS_Store", "__pycache__", ".swiftpm", "DerivedData"]
+
+        var entries: [MentionEntry] = []
+        for name in contents {
+            // Skip hidden files unless query starts with '.'
+            if name.hasPrefix(".") && !filterText.hasPrefix(".") { continue }
+            if skipDirs.contains(name) { continue }
+
+            // Filter by typed text (case-insensitive prefix/contains match)
+            if !filterText.isEmpty {
+                let nameLower = name.lowercased()
+                let filterLower = filterText.lowercased()
+                if !nameLower.contains(filterLower) { continue }
+            }
+
+            let fullPath = (basePath as NSString).appendingPathComponent(name)
+            var isDir: ObjCBool = false
+            fm.fileExists(atPath: fullPath, isDirectory: &isDir)
+
+            let relativePath: String
+            if let lastSlash = mentionQuery.lastIndex(of: "/") {
+                let subdir = String(mentionQuery[mentionQuery.startIndex...lastSlash])
+                relativePath = subdir + name
+            } else {
+                relativePath = name
+            }
+
+            var fileSize = 0
+            if !isDir.boolValue {
+                fileSize = (try? fm.attributesOfItem(atPath: fullPath)[.size] as? Int) ?? 0
+            }
+
+            entries.append(MentionEntry(
+                name: name,
+                relativePath: relativePath,
+                fullPath: fullPath,
+                isDirectory: isDir.boolValue,
+                fileSize: fileSize
+            ))
+        }
+
+        // Sort: directories first, then alphabetical
+        entries.sort { a, b in
+            if a.isDirectory != b.isDirectory { return a.isDirectory }
+            return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+        }
+
+        // Cap results
+        mentionResults = Array(entries.prefix(50))
+    }
+
+    /// Selects a file mention: replaces @query in draft with @filename and attaches the file.
+    private func selectMention(_ entry: MentionEntry) {
+        guard !entry.isDirectory else {
+            navigateIntoDirectory(entry)
+            return
+        }
+
+        // Replace the @query portion in the draft with @relativePath
+        if let atIndex = findActiveMentionAtIndex(in: draft) {
+            let before = String(draft[draft.startIndex..<atIndex])
+            draft = before + "@\(entry.relativePath) "
+        }
+
+        // Attach the file
+        let url = URL(fileURLWithPath: entry.fullPath)
+        if let attachment = loadAttachment(from: url) {
+            attachments.append(attachment)
+        }
+
+        dismissMentionPopup()
+    }
+
+    /// Navigate into a directory in the mention popup.
+    private func navigateIntoDirectory(_ entry: MentionEntry) {
+        // Update the draft's @query to include the directory path
+        if let atIndex = findActiveMentionAtIndex(in: draft) {
+            let before = String(draft[draft.startIndex..<atIndex])
+            draft = before + "@\(entry.relativePath)/"
+            // handleDraftChange will be called by onChange and update the popup
+        }
+    }
+
+    private func dismissMentionPopup() {
+        showMentionPopup = false
+        mentionQuery = ""
+        mentionResults = []
+        mentionSelectedIndex = 0
     }
 
     // MARK: - Attachment chips
