@@ -16,8 +16,23 @@ swift build
 
 BIN_PATH="$(swift build --show-bin-path)/${APP_NAME}"
 
-mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
+FRAMEWORKS_DIR="${CONTENTS_DIR}/Frameworks"
+
+mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}" "${FRAMEWORKS_DIR}"
 cp "${BIN_PATH}" "${MACOS_DIR}/${APP_DISPLAY_NAME}"
+
+# Embed Sparkle.framework into the app bundle
+SPARKLE_FW="$(dirname "${BIN_PATH}")/Sparkle.framework"
+if [ -d "${SPARKLE_FW}" ]; then
+    echo "Embedding Sparkle.framework..."
+    cp -R "${SPARKLE_FW}" "${FRAMEWORKS_DIR}/"
+    # Add rpath so the binary can find the framework in Contents/Frameworks/
+    install_name_tool -add_rpath "@executable_path/../Frameworks" "${MACOS_DIR}/${APP_DISPLAY_NAME}" 2>/dev/null || true
+    # Re-sign after modifying the binary (install_name_tool invalidates the ad-hoc signature)
+    codesign --force --sign - "${MACOS_DIR}/${APP_DISPLAY_NAME}"
+else
+    echo "Warning: Sparkle.framework not found at ${SPARKLE_FW}"
+fi
 
 # Generate .icns from source PNG
 if [ -f "${ICON_SOURCE}" ]; then
