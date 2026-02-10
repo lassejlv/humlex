@@ -15,7 +15,7 @@ jobs:
         include:
           - runner: macos-15
             arch: arm64
-          - runner: macos-13
+          - runner: macos-14
             arch: x86_64
     runs-on: ${{ matrix.runner }}
 
@@ -32,7 +32,7 @@ jobs:
           CI: "true"
         run: |
           chmod +x build-dmg.sh
-          ./build-dmg.sh "${{ steps.version.outputs.version }}"
+          ./build-dmg.sh "${{ steps.version.outputs.version }}" "${{ matrix.arch }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

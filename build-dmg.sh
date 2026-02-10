@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 APP_NAME="AIChat"
 APP_DISPLAY_NAME="Humlex"
 VERSION="${1:-1.0}"                       # accept version as first arg
-ARCH="$(uname -m)"                        # arm64 or x86_64
+ARCH="${2:-$(uname -m)}"                  # arm64 or x86_64 (can override via second arg)
 APP_BUNDLE=".build/${APP_DISPLAY_NAME}.app"
 DMG_NAME="${APP_DISPLAY_NAME}-${VERSION}-${ARCH}.dmg"
 DMG_DIR=".build/dmg"
@@ -18,9 +18,21 @@ echo ""
 
 # ── 1. Compile ────────────────────────────────────────────────────────
 echo "[1/5] Compiling..."
-swift build -c release
+if [ "${ARCH}" = "x86_64" ]; then
+    swift build -c release --arch x86_64
+elif [ "${ARCH}" = "arm64" ]; then
+    swift build -c release --arch arm64
+else
+    swift build -c release
+fi
 
-BIN_PATH="$(swift build -c release --show-bin-path)/${APP_NAME}"
+if [ "${ARCH}" = "x86_64" ]; then
+    BIN_PATH="$(swift build -c release --arch x86_64 --show-bin-path)/${APP_NAME}"
+elif [ "${ARCH}" = "arm64" ]; then
+    BIN_PATH="$(swift build -c release --arch arm64 --show-bin-path)/${APP_NAME}"
+else
+    BIN_PATH="$(swift build -c release --show-bin-path)/${APP_NAME}"
+fi
 CONTENTS_DIR="${APP_BUNDLE}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
