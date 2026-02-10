@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import AppKit
 
 /// A file or folder entry for the @-mention popup.
 struct MentionEntry: Identifiable, Hashable {
@@ -26,7 +27,6 @@ struct ChatComposerView: View {
 
     @Environment(\.appTheme) private var theme
     @FocusState private var isFocused: Bool
-    @State private var isShowingFilePicker = false
     @State private var isShowingDirectoryPicker = false
 
     // @-mention state
@@ -80,7 +80,7 @@ struct ChatComposerView: View {
                 // Bottom bar: attach + @ mention + agent toggle + stop
                 HStack(spacing: 8) {
                     Button {
-                        isShowingFilePicker = true
+                        presentAttachmentOpenPanel()
                     } label: {
                         Image(systemName: "paperclip")
                             .font(.system(size: 14))
@@ -262,13 +262,6 @@ struct ChatComposerView: View {
                 }
             }
             return .ignored
-        }
-        .fileImporter(
-            isPresented: $isShowingFilePicker,
-            allowedContentTypes: [.item],
-            allowsMultipleSelection: true
-        ) { result in
-            handleFilePick(result)
         }
         .fileImporter(
             isPresented: $isShowingDirectoryPicker,
@@ -634,12 +627,28 @@ struct ChatComposerView: View {
 
     // MARK: - File handling
 
-    private func handleFilePick(_ result: Result<[URL], Error>) {
-        guard case .success(let urls) = result else { return }
+    private func appendAttachments(from urls: [URL]) {
         for url in urls {
             if let attachment = loadAttachment(from: url) {
                 attachments.append(attachment)
             }
+        }
+    }
+
+    private func presentAttachmentOpenPanel() {
+        NSApp.activate(ignoringOtherApps: true)
+
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.resolvesAliases = true
+        panel.allowedContentTypes = [.item]
+        panel.title = "Attach Files"
+        panel.prompt = "Attach"
+
+        if panel.runModal() == .OK {
+            appendAttachments(from: panel.urls)
         }
     }
 

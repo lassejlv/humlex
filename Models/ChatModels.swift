@@ -69,6 +69,15 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         let name: String
         let arguments: String
         let serverName: String
+        let thoughtSignature: String?
+
+        init(id: String, name: String, arguments: String, serverName: String, thoughtSignature: String? = nil) {
+            self.id = id
+            self.name = name
+            self.arguments = arguments
+            self.serverName = serverName
+            self.thoughtSignature = thoughtSignature
+        }
     }
 }
 

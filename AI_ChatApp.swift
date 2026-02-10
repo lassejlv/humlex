@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 @main
 struct AI_ChatApp: App {
@@ -16,6 +17,7 @@ struct AI_ChatApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .forceQuitShortcut()
                 .overlay(alignment: .top) {
                     ToastOverlay(manager: toastManager)
                 }
@@ -32,6 +34,14 @@ struct AI_ChatApp: App {
                 }
         }
         .windowToolbarStyle(.unified(showsTitle: false))
+        .commands {
+            CommandGroup(replacing: .appTermination) {
+                Button("Quit Humlex") {
+                    terminateHumlex()
+                }
+                .keyboardShortcut("q")
+            }
+        }
     }
 }
 
@@ -42,5 +52,44 @@ private func updateAppearance(for theme: AppTheme) {
     } else {
         // System theme: let macOS decide
         NSApp.appearance = nil
+    }
+}
+
+private func terminateHumlex() {
+    for window in NSApp.windows {
+        if let sheet = window.attachedSheet {
+            window.endSheet(sheet)
+        }
+    }
+    NSApp.terminate(nil)
+}
+
+private struct ForceQuitShortcutModifier: ViewModifier {
+    @State private var monitor: Any?
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear {
+                if monitor != nil { return }
+                monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                    guard event.modifierFlags.contains(.command),
+                          event.charactersIgnoringModifiers?.lowercased() == "q" else {
+                        return event
+                    }
+                    terminateHumlex()
+                    return nil
+                }
+            }
+            .onDisappear {
+                if let monitor {
+                    NSEvent.removeMonitor(monitor)
+                }
+            }
+    }
+}
+
+private extension View {
+    func forceQuitShortcut() -> some View {
+        modifier(ForceQuitShortcutModifier())
     }
 }

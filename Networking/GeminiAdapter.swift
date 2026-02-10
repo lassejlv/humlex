@@ -120,11 +120,26 @@ private func buildGeminiContents(from history: [LLMChatMessage]) -> [GeminiStrea
                 } else {
                     argsDict = [:]
                 }
+
+                // Some older chat history may not have thought signatures persisted.
+                // Gemini rejects functionCall parts without thoughtSignature, so fall
+                // back to plain text context instead of sending invalid parts.
+                guard let thoughtSignature = tc.thoughtSignature, !thoughtSignature.isEmpty else {
+                    parts.append(Part(
+                        text: "[Previous tool call: \(tc.name) with args \(tc.arguments)]",
+                        inlineData: nil,
+                        functionCall: nil,
+                        functionResponse: nil
+                    ))
+                    continue
+                }
+
                 parts.append(Part(
                     text: nil,
                     inlineData: nil,
                     functionCall: Part.FunctionCallPart(name: tc.name, args: argsDict),
-                    functionResponse: nil
+                    functionResponse: nil,
+                    thoughtSignature: thoughtSignature
                 ))
             }
 
@@ -260,7 +275,13 @@ private func streamGeminiSSE(
                         let id = "gemini-tc-\(toolCallIndex)"
                         let argsData = try? JSONSerialization.data(withJSONObject: fc.args ?? [:])
                         let argsString = argsData.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-                        toolCalls.append(ToolCallInfo(id: id, name: fc.name, arguments: argsString, serverName: ""))
+                        toolCalls.append(ToolCallInfo(
+                            id: id,
+                            name: fc.name,
+                            arguments: argsString,
+                            serverName: "",
+                            thoughtSignature: part.thoughtSignature
+                        ))
                         await onEvent(.toolCallStart(index: toolCallIndex, id: id, name: fc.name))
                         await onEvent(.toolCallArgumentDelta(index: toolCallIndex, delta: argsString))
                         toolCallIndex += 1
@@ -287,10 +308,10 @@ private func streamGeminiSSE(
 private func geminiToolDefs(from mcpTools: [MCPTool]) -> [GeminiStreamRequest.Tool]? {
     guard !mcpTools.isEmpty else { return nil }
     let declarations = mcpTools.map { tool in
-        // Gemini doesn't support $schema or additionalProperties in parameters
-        var params = tool.inputSchema.mapValues { $0.value }
-        params.removeValue(forKey: "$schema")
-        params.removeValue(forKey: "additionalProperties")
+        // Gemini's Schema object rejects several JSON-schema/OpenAPI keys,
+        // so sanitize recursively (including nested items/properties).
+        let rawParams = tool.inputSchema.mapValues { $0.value }
+        let params = sanitizeGeminiSchema(rawParams) as? [String: Any] ?? [:]
         return GeminiStreamRequest.Tool.FunctionDeclaration(
             name: tool.name,
             description: tool.description,
@@ -298,6 +319,36 @@ private func geminiToolDefs(from mcpTools: [MCPTool]) -> [GeminiStreamRequest.To
         )
     }
     return [GeminiStreamRequest.Tool(functionDeclarations: declarations)]
+}
+
+private func sanitizeGeminiSchema(_ value: Any) -> Any {
+    if let dict = value as? [String: Any] {
+        var cleaned: [String: Any] = [:]
+        for (key, nestedValue) in dict {
+            // Gemini does not accept these schema fields.
+            if key == "$schema" ||
+                key == "additionalProperties" ||
+                key == "unevaluatedProperties" ||
+                key == "patternProperties" ||
+                key == "propertyNames" ||
+                key == "dependentSchemas" ||
+                key == "contains" ||
+                key == "if" ||
+                key == "then" ||
+                key == "else"
+            {
+                continue
+            }
+            cleaned[key] = sanitizeGeminiSchema(nestedValue)
+        }
+        return cleaned
+    }
+
+    if let array = value as? [Any] {
+        return array.map { sanitizeGeminiSchema($0) }
+    }
+
+    return value
 }
 
 private func validateGeminiHTTPResponse(_ response: URLResponse, data: Data) throws {
@@ -331,6 +382,29 @@ struct GeminiStreamRequest: Encodable {
             let inlineData: InlineData?
             let functionCall: FunctionCallPart?
             let functionResponse: FunctionResponsePart?
+            let thoughtSignature: String?
+
+            enum CodingKeys: String, CodingKey {
+                case text
+                case inlineData
+                case functionCall
+                case functionResponse
+                case thoughtSignature
+            }
+
+            init(
+                text: String?,
+                inlineData: InlineData?,
+                functionCall: FunctionCallPart?,
+                functionResponse: FunctionResponsePart?,
+                thoughtSignature: String? = nil
+            ) {
+                self.text = text
+                self.inlineData = inlineData
+                self.functionCall = functionCall
+                self.functionResponse = functionResponse
+                self.thoughtSignature = thoughtSignature
+            }
 
             struct InlineData: Encodable {
                 let mimeType: String
@@ -377,6 +451,22 @@ struct GeminiStreamChunk: Decodable {
             struct Part: Decodable {
                 let text: String?
                 let functionCall: FunctionCall?
+                let thoughtSignature: String?
+
+                enum CodingKeys: String, CodingKey {
+                    case text
+                    case functionCall
+                    case thoughtSignature
+                    case thought_signature
+                }
+
+                init(from decoder: Decoder) throws {
+                    let container = try decoder.container(keyedBy: CodingKeys.self)
+                    text = try container.decodeIfPresent(String.self, forKey: .text)
+                    functionCall = try container.decodeIfPresent(FunctionCall.self, forKey: .functionCall)
+                    thoughtSignature = try container.decodeIfPresent(String.self, forKey: .thoughtSignature)
+                        ?? container.decodeIfPresent(String.self, forKey: .thought_signature)
+                }
             }
 
             let parts: [Part]?
