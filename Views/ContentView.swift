@@ -11,6 +11,7 @@ import SwiftUI
 struct ContentView: View {
     @AppStorage("selected_model_reference") private var selectedModelReference: String = ""
     @AppStorage("selected_thread_id") private var selectedThreadIDRaw: String = ""
+    @AppStorage("codex_sandbox_mode") private var codexSandboxModeRaw: String = CodexSandboxMode.readOnly.rawValue
 
     @State private var models: [LLMModel] = []
     @State private var isLoadingModels = false
@@ -268,6 +269,11 @@ struct ContentView: View {
                             }
                         }
                         .onChange(of: currentMessages.last?.text ?? "") { _, _ in
+                            if let lastID = currentMessages.last?.id {
+                                proxy.scrollTo(lastID, anchor: .bottom)
+                            }
+                        }
+                        .onChange(of: currentMessages.last?.toolCalls?.count ?? 0) { _, _ in
                             if let lastID = currentMessages.last?.id {
                                 proxy.scrollTo(lastID, anchor: .bottom)
                             }
@@ -718,6 +724,7 @@ struct ContentView: View {
             if let idx = selectedThreadIndex {
                 adapter.workingDirectory = threads[idx].workingDirectory
             }
+            adapter.sandboxMode = CodexSandboxMode(rawValue: codexSandboxModeRaw) ?? .readOnly
             return adapter
         }
     }
@@ -1139,6 +1146,12 @@ struct ContentView: View {
                             break
                         case .toolCallArgumentDelta(_, _):
                             break
+                        case .cliToolUse(let id, let name, let arguments, let serverName):
+                            // Append CLI tool call to the message in real-time for live display
+                            appendCLIToolCall(
+                                ChatMessage.ToolCall(id: id, name: name, arguments: arguments, serverName: serverName),
+                                to: assistantID, in: threadID
+                            )
                         case .done:
                             break
                         }
@@ -1147,6 +1160,23 @@ struct ContentView: View {
 
                 // Check if there are tool calls to execute
                 if !result.toolCalls.isEmpty {
+                    // Update the assistant message with tool call info
+                    guard let threadIdx = threads.firstIndex(where: { $0.id == threadID }),
+                          let msgIdx = threads[threadIdx].messages.firstIndex(where: { $0.id == assistantID }) else {
+                        return
+                    }
+
+                    if isCLIProvider {
+                        // CLI providers (Claude Code, Codex) handle tools internally.
+                        // Store tool calls on the message for display only — do NOT execute them.
+                        let resolvedToolCalls = result.toolCalls.map { tc -> ChatMessage.ToolCall in
+                            ChatMessage.ToolCall(id: tc.id, name: tc.name, arguments: tc.arguments, serverName: tc.serverName)
+                        }
+                        threads[threadIdx].messages[msgIdx].toolCalls = resolvedToolCalls
+                        // Done — no tool execution, no loop continuation
+                        return
+                    }
+
                     // Detect repeated identical tool calls to prevent infinite loops
                     let currentSignature = result.toolCalls.map { "\($0.name):\($0.arguments)" }.joined(separator: "|")
                     if currentSignature == previousToolCallSignature {
@@ -1156,12 +1186,6 @@ struct ContentView: View {
                         return
                     }
                     previousToolCallSignature = currentSignature
-
-                    // Update the assistant message with tool call info
-                    guard let threadIdx = threads.firstIndex(where: { $0.id == threadID }),
-                          let msgIdx = threads[threadIdx].messages.firstIndex(where: { $0.id == assistantID }) else {
-                        return
-                    }
 
                     // Map tool call server names from tool registry
                     let resolvedToolCalls = result.toolCalls.map { tc -> ChatMessage.ToolCall in
@@ -1327,6 +1351,22 @@ struct ContentView: View {
             return
         }
         threads[threadIndex].messages[messageIndex].text.append(delta)
+    }
+
+    /// Append a CLI tool call to a message's toolCalls array during streaming.
+    /// This allows tool call chips to appear in real-time as the CLI provider executes them.
+    private func appendCLIToolCall(_ toolCall: ChatMessage.ToolCall, to messageID: UUID, in threadID: UUID) {
+        guard let threadIndex = threads.firstIndex(where: { $0.id == threadID }),
+            let messageIndex = threads[threadIndex].messages.firstIndex(where: {
+                $0.id == messageID
+            })
+        else {
+            return
+        }
+        if threads[threadIndex].messages[messageIndex].toolCalls == nil {
+            threads[threadIndex].messages[messageIndex].toolCalls = []
+        }
+        threads[threadIndex].messages[messageIndex].toolCalls?.append(toolCall)
     }
 
     private func setMessageText(_ newText: String, for messageID: UUID, in threadID: UUID) {

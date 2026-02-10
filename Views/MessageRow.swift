@@ -129,15 +129,17 @@ struct MessageRow: View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(toolCalls, id: \.id) { tc in
                 let isBuiltIn = AgentTools.isBuiltIn(serverName: tc.serverName)
+                let isCLIProvider = Self.isCLIProviderTool(serverName: tc.serverName)
+                let isKnownTool = isBuiltIn || isCLIProvider
                 let args = parseToolArgs(tc.arguments)
 
                 VStack(alignment: .leading, spacing: 0) {
                     // Main chip row
                     HStack(spacing: 6) {
-                        Image(systemName: isBuiltIn ? toolCallIcon(tc.name) : "wrench.and.screwdriver")
+                        Image(systemName: isKnownTool ? toolCallIcon(tc.name) : "wrench.and.screwdriver")
                             .font(.system(size: 11))
-                            .foregroundStyle(isBuiltIn ? .orange : theme.accent)
-                        Text(isBuiltIn ? (AgentToolName(rawValue: tc.name)?.displayName ?? tc.name) : tc.name)
+                            .foregroundStyle(isBuiltIn ? .orange : (isCLIProvider ? .purple : theme.accent))
+                        Text(isKnownTool ? (AgentToolName(rawValue: tc.name)?.displayName ?? tc.name) : tc.name)
                             .font(.system(size: 12, weight: .medium, design: .monospaced))
                             .foregroundStyle(theme.textPrimary)
 
@@ -174,6 +176,11 @@ struct MessageRow: View {
         .frame(maxWidth: 760, alignment: .leading)
     }
 
+    /// Check if a server name belongs to a CLI provider (tools are informational only).
+    private static func isCLIProviderTool(serverName: String) -> Bool {
+        serverName == "Codex" || serverName == "Claude Code"
+    }
+
     private func toolCallIcon(_ name: String) -> String {
         switch name {
         case "read_file": return "doc.text"
@@ -208,13 +215,19 @@ struct MessageRow: View {
         case "run_command":
             if let cmd = args["command"] as? String {
                 // Show first 60 chars of command
-                if cmd.count > 60 {
-                    return String(cmd.prefix(60)) + "..."
+                let summary = cmd.count > 60 ? String(cmd.prefix(60)) + "..." : cmd
+                // Append status if available (from CLI providers)
+                if let status = args["status"] as? String, !status.isEmpty, status != "0" {
+                    return "\(summary) (exit: \(status))"
                 }
-                return cmd
+                return summary
             }
             return nil
         default:
+            // For unknown CLI tool types, show a summary of the first string value
+            if let firstValue = args.values.first(where: { $0 is String }) as? String {
+                return firstValue.count > 60 ? String(firstValue.prefix(60)) + "..." : firstValue
+            }
             return nil
         }
     }

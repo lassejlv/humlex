@@ -1,6 +1,7 @@
 import ClaudeCodeSDK
 import Combine
 import Foundation
+import SwiftAnthropic
 
 // MARK: - Claude Code Adapter
 
@@ -143,6 +144,8 @@ struct ClaudeCodeAdapter: LLMProviderAdapter {
         onEvent: @escaping @Sendable (StreamEvent) async -> Void
     ) async throws -> StreamResult {
         var fullText = ""
+        var collectedToolCalls: [ToolCallInfo] = []
+        var toolCallCounter = 0
 
         // Bridge Combine publisher to async/await using AsyncStream
         let stream = AsyncThrowingStream<ResponseChunk, Error> { continuation in
@@ -170,12 +173,17 @@ struct ClaudeCodeAdapter: LLMProviderAdapter {
 
             switch chunk {
             case .assistant(let assistantMessage):
-                // Extract text content from the assistant's MessageResponse
-                let text = extractText(from: assistantMessage)
+                // Extract text and tool calls from the assistant's MessageResponse
+                let (text, tools) = extractContent(from: assistantMessage, counter: &toolCallCounter)
                 if !text.isEmpty {
                     fullText += text
                     await onEvent(.textDelta(text))
                 }
+                // Emit tool calls in real-time for live UI display
+                for tc in tools {
+                    await onEvent(.cliToolUse(id: tc.id, name: tc.name, arguments: tc.arguments, serverName: tc.serverName))
+                }
+                collectedToolCalls.append(contentsOf: tools)
 
             case .result(let resultMessage):
                 // The result message may contain final text
@@ -198,26 +206,100 @@ struct ClaudeCodeAdapter: LLMProviderAdapter {
         }
 
         await onEvent(.done)
-        // Claude Code handles tools internally — no tool calls exposed to the app
-        return StreamResult(text: fullText, toolCalls: [])
+        // Return informational tool calls for display (these are already executed by Claude Code)
+        return StreamResult(text: fullText, toolCalls: collectedToolCalls)
     }
 
-    /// Extract text content from an AssistantMessage's MessageResponse.
-    private func extractText(from assistantMessage: AssistantMessage) -> String {
+    /// Extract text content and tool call info from an AssistantMessage's MessageResponse.
+    private func extractContent(from assistantMessage: AssistantMessage, counter: inout Int) -> (text: String, toolCalls: [ToolCallInfo]) {
         var text = ""
+        var toolCalls: [ToolCallInfo] = []
+
         for content in assistantMessage.message.content {
             switch content {
             case .text(let t, _):
                 text += t
+
+            case .toolUse(let toolUse):
+                // Surface tool usage for display in the UI
+                counter += 1
+                let toolName = Self.mapClaudeToolName(toolUse.name)
+                let argsJSON = Self.dynamicInputToJSON(toolUse.input)
+                toolCalls.append(ToolCallInfo(
+                    id: toolUse.id,
+                    name: toolName,
+                    arguments: argsJSON,
+                    serverName: "Claude Code"
+                ))
+
+            case .serverToolUse(let serverToolUse):
+                // Surface server-side tool usage (e.g., web search)
+                counter += 1
+                let argsJSON = Self.dynamicInputToJSON(serverToolUse.input)
+                toolCalls.append(ToolCallInfo(
+                    id: serverToolUse.id,
+                    name: serverToolUse.name,
+                    arguments: argsJSON,
+                    serverName: "Claude Code"
+                ))
+
             case .thinking:
                 // Skip thinking blocks — they're internal reasoning
                 break
+
             default:
-                // Skip tool_use, server_tool_use, etc. — handled internally by Claude Code
+                // Skip tool results and other content types
                 break
             }
         }
-        return text
+
+        return (text, toolCalls)
+    }
+
+    /// Map Claude Code's internal tool names to our display names where applicable.
+    private static func mapClaudeToolName(_ name: String) -> String {
+        // Claude Code uses names like "Read", "Write", "Edit", "Bash", "ListDir", "Search"
+        switch name.lowercased() {
+        case "read", "read_file": return "read_file"
+        case "write", "write_file": return "write_file"
+        case "edit", "edit_file": return "edit_file"
+        case "bash", "execute", "run_command": return "run_command"
+        case "listdir", "list_dir", "list_directory": return "list_directory"
+        case "search", "search_files", "grep": return "search_files"
+        default: return name
+        }
+    }
+
+    /// Convert a DynamicContent input dictionary to a JSON string.
+    private static func dynamicInputToJSON(_ input: [String: MessageResponse.Content.DynamicContent]) -> String {
+        // Convert DynamicContent values to native types for JSONSerialization
+        var dict: [String: Any] = [:]
+        for (key, value) in input {
+            dict[key] = dynamicContentToAny(value)
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]),
+              let str = String(data: data, encoding: .utf8)
+        else { return "{}" }
+        return str
+    }
+
+    /// Recursively convert DynamicContent to native Swift types for JSON serialization.
+    private static func dynamicContentToAny(_ content: MessageResponse.Content.DynamicContent) -> Any {
+        switch content {
+        case .string(let s): return s
+        case .integer(let i): return i
+        case .double(let d): return d
+        case .bool(let b): return b
+        case .null: return NSNull()
+        case .dictionary(let dict):
+            var result: [String: Any] = [:]
+            for (k, v) in dict {
+                result[k] = dynamicContentToAny(v)
+            }
+            return result
+        case .array(let arr):
+            return arr.map { dynamicContentToAny($0) }
+        }
     }
 }
 

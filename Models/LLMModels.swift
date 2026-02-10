@@ -95,6 +95,8 @@ enum StreamEvent: Sendable {
     case textDelta(String)
     case toolCallStart(index: Int, id: String, name: String)
     case toolCallArgumentDelta(index: Int, delta: String)
+    /// Informational tool usage from CLI providers (already executed, display only).
+    case cliToolUse(id: String, name: String, arguments: String, serverName: String)
     case done
 }
 

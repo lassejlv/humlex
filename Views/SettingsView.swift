@@ -39,6 +39,7 @@ struct SettingsView: View {
     @State private var claudeCodeAvailability: ClaudeCodeAvailability?
     @State private var codexAvailability: CodexAvailability?
     @State private var isLoggingIntoCodex = false
+    @AppStorage("codex_sandbox_mode") private var codexSandboxModeRaw: String = CodexSandboxMode.readOnly.rawValue
 
     // MCP add server form
     @State private var showAddServerForm = false
@@ -478,6 +479,60 @@ struct SettingsView: View {
                             .stroke(theme.composerBorder, lineWidth: 1)
                     )
                 }
+            }
+
+            // Sandbox Mode
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Sandbox Mode")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(theme.textSecondary)
+
+                VStack(spacing: 4) {
+                    ForEach(Array(CodexSandboxMode.allCases), id: \.self) { (mode: CodexSandboxMode) in
+                        let modeSelected = (codexSandboxModeRaw == mode.rawValue)
+                        Button {
+                            codexSandboxModeRaw = mode.rawValue
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: mode.icon)
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(modeSelected ? theme.accent : theme.textSecondary)
+                                    .frame(width: 20)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(mode.displayName)
+                                        .font(.system(size: 13, weight: modeSelected ? .semibold : .regular))
+                                        .foregroundStyle(theme.textPrimary)
+
+                                    Text(mode.description)
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(theme.textSecondary)
+                                }
+
+                                Spacer()
+
+                                if modeSelected {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.system(size: 14))
+                                        .foregroundStyle(theme.accent)
+                                }
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(
+                                modeSelected ? theme.accent.opacity(0.1) : Color.clear,
+                                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(4)
+                .background(theme.surfaceBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(theme.composerBorder, lineWidth: 1)
+                )
             }
 
             // Install instructions
