@@ -11,6 +11,9 @@ struct OpenAICodexAdapter: LLMProviderAdapter {
     /// The working directory for Codex operations.
     var workingDirectory: String?
 
+    /// Sandbox policy for command execution.
+    var sandboxMode: CodexSandboxMode = .readOnly
+
     func fetchModels(apiKey: String) async throws -> [LLMModel] {
         // Verify the Codex CLI is installed
         guard let codexPath = CodexPathDetector.detectCodexPath() else {
@@ -104,7 +107,7 @@ struct OpenAICodexAdapter: LLMProviderAdapter {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: codexPath)
 
-        var args = ["exec", "--json", "--sandbox", "read-only", "--skip-git-repo-check"]
+        var args = ["exec", "--json", "--sandbox", sandboxMode.rawValue, "--skip-git-repo-check"]
 
         // Parse modelID — may contain "::effort" suffix (e.g. "gpt-5.3-codex::high")
         let (baseModel, reasoningEffort) = Self.parseModelID(modelID)
@@ -193,11 +196,14 @@ struct OpenAICodexAdapter: LLMProviderAdapter {
 
     /// Parse the JSONL stream from `codex exec --json`.
     ///
+    /// Reads stdout incrementally (line-by-line as data arrives) so that both text
+    /// and tool-use events are emitted in real-time for live UI updates.
+    ///
     /// Event types we handle:
-    /// - `thread.started` — log for debugging
-    /// - `item.completed` with `item.type == "agent_message"` — emit text
+    /// - `item.completed` / `item.started` with `item.type == "agent_message"` — emit textDelta
+    /// - `item.completed` with tool item types — emit cliToolUse immediately
     /// - `turn.completed` — mark done
-    /// - `error` — throw
+    /// - `error` / `turn.failed` — throw
     private func parseJSONLStream(
         pipe: Pipe,
         process: Process,
@@ -206,19 +212,37 @@ struct OpenAICodexAdapter: LLMProviderAdapter {
     ) async throws -> StreamResult {
         var fullText = ""
         var emittedAny = false
+        var collectedToolCalls: [ToolCallInfo] = []
+        var toolCallCounter = 0
 
-        // Read stdout line by line
         let fileHandle = pipe.fileHandleForReading
 
-        // Use an AsyncStream to bridge the file handle reading
+        // Stream stdout incrementally: read chunks as they arrive and split into lines.
+        // This ensures events are emitted to the UI in real-time.
         let lineStream = AsyncStream<String> { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                let data = fileHandle.readDataToEndOfFile()
-                if let output = String(data: data, encoding: .utf8) {
-                    for line in output.components(separatedBy: .newlines) {
-                        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                var buffer = ""
+                while true {
+                    let data = fileHandle.availableData
+                    if data.isEmpty {
+                        // EOF — process has finished writing
+                        // Yield any remaining partial line
+                        let trimmed = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !trimmed.isEmpty {
                             continuation.yield(trimmed)
+                        }
+                        break
+                    }
+                    if let chunk = String(data: data, encoding: .utf8) {
+                        buffer += chunk
+                        // Split buffer into complete lines
+                        while let newlineRange = buffer.range(of: "\n") {
+                            let line = String(buffer[buffer.startIndex..<newlineRange.lowerBound])
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                            buffer = String(buffer[newlineRange.upperBound...])
+                            if !line.isEmpty {
+                                continuation.yield(line)
+                            }
                         }
                     }
                 }
@@ -237,38 +261,83 @@ struct OpenAICodexAdapter: LLMProviderAdapter {
             guard let eventType = json["type"] as? String else { continue }
 
             switch eventType {
-            case "item.completed":
-                // Extract the item
+            case "item.completed", "item.started":
                 guard let item = json["item"] as? [String: Any],
                     let itemType = item["type"] as? String
                 else { continue }
 
-                if itemType == "agent_message" {
+                switch itemType {
+                case "agent_message":
                     if let text = item["text"] as? String, !text.isEmpty {
                         fullText += text
                         emittedAny = true
                         await onEvent(.textDelta(text))
                     }
-                }
 
-            case "item.started":
-                // Optionally we could show a "thinking" indicator here
-                // For now, we extract partial text from in-progress agent messages
-                if let item = json["item"] as? [String: Any],
-                    let itemType = item["type"] as? String,
-                    itemType == "agent_message",
-                    let text = item["text"] as? String, !text.isEmpty {
-                    fullText += text
+                case "command_execution":
+                    toolCallCounter += 1
+                    let command = item["command"] as? String ?? ""
+                    let status = item["status"] as? String ?? ""
+                    let id = "codex-tool-\(toolCallCounter)"
+                    let argsDict: [String: Any] = ["command": command, "status": status]
+                    let argsJSON = Self.jsonString(from: argsDict)
                     emittedAny = true
-                    await onEvent(.textDelta(text))
+                    collectedToolCalls.append(ToolCallInfo(id: id, name: "run_command", arguments: argsJSON, serverName: "Codex"))
+                    await onEvent(.cliToolUse(id: id, name: "run_command", arguments: argsJSON, serverName: "Codex"))
+
+                case "file_read", "file_read_range":
+                    toolCallCounter += 1
+                    let filePath = item["file_path"] as? String ?? item["path"] as? String ?? ""
+                    let id = "codex-tool-\(toolCallCounter)"
+                    let argsJSON = Self.jsonString(from: ["path": filePath])
+                    emittedAny = true
+                    collectedToolCalls.append(ToolCallInfo(id: id, name: "read_file", arguments: argsJSON, serverName: "Codex"))
+                    await onEvent(.cliToolUse(id: id, name: "read_file", arguments: argsJSON, serverName: "Codex"))
+
+                case "file_write", "file_create", "file_edit":
+                    toolCallCounter += 1
+                    let filePath = item["file_path"] as? String ?? item["path"] as? String ?? ""
+                    let toolName = itemType == "file_edit" ? "edit_file" : "write_file"
+                    let id = "codex-tool-\(toolCallCounter)"
+                    let argsJSON = Self.jsonString(from: ["path": filePath])
+                    emittedAny = true
+                    collectedToolCalls.append(ToolCallInfo(id: id, name: toolName, arguments: argsJSON, serverName: "Codex"))
+                    await onEvent(.cliToolUse(id: id, name: toolName, arguments: argsJSON, serverName: "Codex"))
+
+                case "directory_list", "list_directory":
+                    toolCallCounter += 1
+                    let dirPath = item["path"] as? String ?? item["directory"] as? String ?? "."
+                    let id = "codex-tool-\(toolCallCounter)"
+                    let argsJSON = Self.jsonString(from: ["path": dirPath])
+                    emittedAny = true
+                    collectedToolCalls.append(ToolCallInfo(id: id, name: "list_directory", arguments: argsJSON, serverName: "Codex"))
+                    await onEvent(.cliToolUse(id: id, name: "list_directory", arguments: argsJSON, serverName: "Codex"))
+
+                case "mcp_tool_call":
+                    toolCallCounter += 1
+                    let toolName = item["name"] as? String ?? item["tool_name"] as? String ?? "mcp_tool"
+                    let input = item["input"] as? [String: Any] ?? item["arguments"] as? [String: Any] ?? [:]
+                    let id = "codex-tool-\(toolCallCounter)"
+                    let argsJSON = Self.jsonString(from: input)
+                    let serverName = item["server_name"] as? String ?? "Codex"
+                    emittedAny = true
+                    collectedToolCalls.append(ToolCallInfo(id: id, name: toolName, arguments: argsJSON, serverName: serverName))
+                    await onEvent(.cliToolUse(id: id, name: toolName, arguments: argsJSON, serverName: serverName))
+
+                case "reasoning":
+                    // Skip reasoning items — these are internal model reasoning, not tool calls
+                    break
+
+                default:
+                    // Other item types — only surface if they have meaningful data
+                    // Skip purely internal items like plan_update, etc.
+                    break
                 }
 
             case "turn.completed":
-                // Turn finished — we're done
                 break
 
             case "turn.failed":
-                // Extract error message if available
                 let errorMsg =
                     (json["error"] as? [String: Any])?["message"] as? String
                     ?? "Codex turn failed"
@@ -282,11 +351,9 @@ struct OpenAICodexAdapter: LLMProviderAdapter {
                 throw AdapterError.api(message: errorMsg)
 
             case "thread.started", "turn.started":
-                // Informational events — skip
                 break
 
             default:
-                // Unknown event types — skip gracefully
                 break
             }
         }
@@ -296,7 +363,6 @@ struct OpenAICodexAdapter: LLMProviderAdapter {
 
         // Check if the process exited with an error
         if process.terminationStatus != 0 && !emittedAny {
-            // Try to get stderr for error context
             let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
             let stderrText = String(data: stderrData, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -314,7 +380,14 @@ struct OpenAICodexAdapter: LLMProviderAdapter {
         }
 
         await onEvent(.done)
-        // Codex handles tools internally — no tool calls exposed to the app
-        return StreamResult(text: fullText, toolCalls: [])
+        return StreamResult(text: fullText, toolCalls: collectedToolCalls)
+    }
+
+    /// Serialize a dictionary to a JSON string for tool call arguments.
+    private static func jsonString(from dict: [String: Any]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]),
+              let str = String(data: data, encoding: .utf8)
+        else { return "{}" }
+        return str
     }
 }

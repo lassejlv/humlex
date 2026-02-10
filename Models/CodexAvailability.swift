@@ -1,5 +1,46 @@
 import Foundation
 
+// MARK: - Sandbox Mode
+
+/// Sandbox policy for `codex exec --sandbox <mode>`.
+/// Controls what the Codex agent is allowed to do on the filesystem and network.
+enum CodexSandboxMode: String, CaseIterable, Identifiable {
+    case readOnly = "read-only"
+    case workspaceWrite = "workspace-write"
+    case fullAccess = "danger-full-access"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .readOnly: return "Read-only"
+        case .workspaceWrite: return "Workspace Write"
+        case .fullAccess: return "Full Access"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .readOnly:
+            return "Commands can only read files. No writes, no network."
+        case .workspaceWrite:
+            return "Read anything, write within the working directory. No network."
+        case .fullAccess:
+            return "No restrictions. Full filesystem and network access."
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .readOnly: return "lock.shield"
+        case .workspaceWrite: return "pencil.and.outline"
+        case .fullAccess: return "exclamationmark.triangle"
+        }
+    }
+}
+
+// MARK: - Availability
+
 /// Represents the availability and authentication status of the OpenAI Codex CLI.
 enum CodexAvailability {
     case available(loggedIn: Bool)
