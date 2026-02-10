@@ -127,15 +127,16 @@ struct MessageRow: View {
     private func toolCallsView(_ toolCalls: [ChatMessage.ToolCall]) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(toolCalls, id: \.id) { tc in
+                let isBuiltIn = AgentTools.isBuiltIn(serverName: tc.serverName)
                 HStack(spacing: 6) {
-                    Image(systemName: "wrench.and.screwdriver")
+                    Image(systemName: isBuiltIn ? "terminal" : "wrench.and.screwdriver")
                         .font(.system(size: 11))
-                        .foregroundStyle(theme.accent)
-                    Text(tc.name)
+                        .foregroundStyle(isBuiltIn ? .orange : theme.accent)
+                    Text(isBuiltIn ? (AgentToolName(rawValue: tc.name)?.displayName ?? tc.name) : tc.name)
                         .font(.system(size: 12, weight: .medium, design: .monospaced))
                         .foregroundStyle(theme.textPrimary)
                     if !tc.serverName.isEmpty {
-                        Text("(\(tc.serverName))")
+                        Text(isBuiltIn ? "Agent" : tc.serverName)
                             .font(.system(size: 11))
                             .foregroundStyle(theme.textTertiary)
                     }
@@ -153,36 +154,75 @@ struct MessageRow: View {
     }
 
     private var toolResultBlock: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let isBuiltIn = message.toolName.map { AgentToolName(rawValue: $0) != nil } ?? false
+        let isCommand = message.toolName == "run_command"
+        let isFileRead = message.toolName == "read_file" || message.toolName == "search_files"
+        let isFileWrite = message.toolName == "write_file" || message.toolName == "edit_file"
+
+        return VStack(alignment: .leading, spacing: 4) {
             // Header
             HStack(spacing: 6) {
-                Image(systemName: "arrow.turn.down.right")
+                Image(systemName: isBuiltIn ? "terminal" : "arrow.turn.down.right")
                     .font(.system(size: 11))
-                    .foregroundStyle(theme.accent)
-                Text("Tool Result")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(theme.textSecondary)
-                if let name = message.toolName {
-                    Text(name)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(theme.textTertiary)
+                    .foregroundStyle(isBuiltIn ? .orange : theme.accent)
+
+                if isBuiltIn, let name = message.toolName, let displayName = AgentToolName(rawValue: name)?.displayName {
+                    Text(displayName)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(theme.textSecondary)
+                } else {
+                    Text("Tool Result")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(theme.textSecondary)
+                    if let name = message.toolName {
+                        Text(name)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(theme.textTertiary)
+                    }
                 }
             }
 
-            // Result content
-            Text(message.text)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(theme.textSecondary)
-                .textSelection(.enabled)
-                .lineLimit(8)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .frame(maxWidth: 760, alignment: .leading)
-                .background(theme.codeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(theme.codeBorder, lineWidth: 1)
-                )
+            // Result content — styled by type
+            if isFileWrite {
+                // Compact confirmation for write/edit
+                Text(message.text)
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.textSecondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: 760, alignment: .leading)
+                    .background(theme.codeBackground.opacity(0.5), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            } else if isCommand {
+                // Terminal-styled block for run_command
+                Text(message.text)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(Color.green.opacity(0.85))
+                    .textSelection(.enabled)
+                    .lineLimit(12)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: 760, alignment: .leading)
+                    .background(Color.black.opacity(0.85), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.green.opacity(0.2), lineWidth: 1)
+                    )
+            } else {
+                // Default: code block for read_file/search_files/MCP results
+                Text(message.text)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(theme.textSecondary)
+                    .textSelection(.enabled)
+                    .lineLimit(isFileRead ? 15 : 8)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: 760, alignment: .leading)
+                    .background(theme.codeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(theme.codeBorder, lineWidth: 1)
+                    )
+            }
         }
     }
 

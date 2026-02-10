@@ -4,6 +4,30 @@ struct ChatThread: Identifiable, Hashable, Codable {
     let id: UUID
     var title: String
     var messages: [ChatMessage]
+    var agentEnabled: Bool
+    var workingDirectory: String?
+
+    init(id: UUID, title: String, messages: [ChatMessage], agentEnabled: Bool = false, workingDirectory: String? = nil) {
+        self.id = id
+        self.title = title
+        self.messages = messages
+        self.agentEnabled = agentEnabled
+        self.workingDirectory = workingDirectory
+    }
+
+    // Custom Codable to handle missing keys from old persisted data
+    enum CodingKeys: String, CodingKey {
+        case id, title, messages, agentEnabled, workingDirectory
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        messages = try container.decode([ChatMessage].self, forKey: .messages)
+        agentEnabled = try container.decodeIfPresent(Bool.self, forKey: .agentEnabled) ?? false
+        workingDirectory = try container.decodeIfPresent(String.self, forKey: .workingDirectory)
+    }
 }
 
 struct ChatMessage: Identifiable, Hashable, Codable {

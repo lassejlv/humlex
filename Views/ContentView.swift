@@ -50,6 +50,9 @@ struct ContentView: View {
     @State private var streamingTask: Task<Void, Never>?
     @State private var threadToDelete: ChatThread?
     @State private var isCommandPaletteOpen: Bool = false
+    @State private var agentToolExecutor = AgentToolExecutor()
+    @State private var pendingToolConfirmation: PendingToolConfirmation?
+    @State private var isShowingAgentDirectoryPicker = false
     @StateObject private var mcpManager = MCPManager.shared
     @EnvironmentObject private var themeManager: ThemeManager
     @Environment(\.appTheme) private var theme
@@ -97,6 +100,34 @@ struct ContentView: View {
     private var currentMessages: [ChatMessage] {
         guard let idx = selectedThreadIndex else { return [] }
         return threads[idx].messages
+    }
+
+    /// Binding to the selected thread's agentEnabled flag.
+    private var agentEnabledBinding: Binding<Bool> {
+        Binding(
+            get: {
+                guard let idx = selectedThreadIndex else { return false }
+                return threads[idx].agentEnabled
+            },
+            set: { newValue in
+                guard let idx = selectedThreadIndex else { return }
+                threads[idx].agentEnabled = newValue
+            }
+        )
+    }
+
+    /// Binding to the selected thread's working directory.
+    private var workingDirectoryBinding: Binding<String?> {
+        Binding(
+            get: {
+                guard let idx = selectedThreadIndex else { return nil }
+                return threads[idx].workingDirectory
+            },
+            set: { newValue in
+                guard let idx = selectedThreadIndex else { return }
+                threads[idx].workingDirectory = newValue
+            }
+        )
     }
 
     var body: some View {
@@ -230,6 +261,8 @@ struct ContentView: View {
                 ChatComposerView(
                     draft: $draft,
                     attachments: $pendingAttachments,
+                    agentEnabled: agentEnabledBinding,
+                    workingDirectory: workingDirectoryBinding,
                     isSending: isSending,
                     canSend: canSend
                 ) {
@@ -345,7 +378,26 @@ struct ContentView: View {
                 actions: commandPaletteActions
             )
         }
+        .overlay {
+            // Agent tool confirmation overlay
+            if let confirmation = pendingToolConfirmation {
+                toolConfirmationOverlay(confirmation)
+            }
+        }
         .commandPaletteShortcut(isPresented: $isCommandPaletteOpen)
+        .fileImporter(
+            isPresented: $isShowingAgentDirectoryPicker,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            if case .success(let urls) = result, let url = urls.first,
+               let idx = selectedThreadIndex {
+                threads[idx].workingDirectory = url.path
+                threads[idx].agentEnabled = true
+                let abbreviated = abbreviatePathForToast(url.path)
+                toastManager.show(.success("Agent mode ON \u{2022} \(abbreviated)"))
+            }
+        }
     }
 
     // MARK: - Command Palette Actions
@@ -503,6 +555,38 @@ struct ContentView: View {
             selectedThreadID = threads.first?.id
             toastManager.show(.success("All chats cleared", icon: "trash"))
         })
+
+        // Agent mode toggle
+        if let threadID = selectedThreadID,
+           let thread = threads.first(where: { $0.id == threadID }) {
+            if thread.agentEnabled {
+                actions.append(CommandAction(
+                    title: "Disable Agent Mode",
+                    subtitle: "Turn off built-in coding tools",
+                    icon: "terminal"
+                ) {
+                    if let idx = threads.firstIndex(where: { $0.id == threadID }) {
+                        threads[idx].agentEnabled = false
+                        toastManager.show(.info("Agent mode disabled", icon: "terminal"))
+                    }
+                })
+            } else {
+                actions.append(CommandAction(
+                    title: "Enable Agent Mode",
+                    subtitle: "Type /agent <path> or pick a folder",
+                    icon: "terminal"
+                ) {
+                    if let idx = threads.firstIndex(where: { $0.id == threadID }) {
+                        if threads[idx].workingDirectory != nil {
+                            threads[idx].agentEnabled = true
+                            toastManager.show(.success("Agent mode ON", icon: "terminal"))
+                        } else {
+                            isShowingAgentDirectoryPicker = true
+                        }
+                    }
+                })
+            }
+        }
 
         return actions
     }
@@ -790,6 +874,15 @@ struct ContentView: View {
     @MainActor
     private func sendMessage() async {
         guard let idx = selectedThreadIndex else { return }
+
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Handle /agent slash command
+        if text.hasPrefix("/agent") {
+            handleAgentCommand(text, threadIndex: idx)
+            return
+        }
+
         guard let selectedModel else {
             statusMessage = "Select a model first."
             return
@@ -797,7 +890,6 @@ struct ContentView: View {
 
         let threadID = threads[idx].id
         let key = apiKey(for: selectedModel.provider)
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !key.isEmpty else {
             statusMessage = "Missing \(selectedModel.provider.rawValue) API key."
@@ -831,10 +923,79 @@ struct ContentView: View {
         )
     }
 
+    // MARK: - /agent Slash Command
+
+    /// Handle `/agent [path|off]` slash command.
+    /// - `/agent` — toggle agent mode; opens folder picker if no directory set
+    /// - `/agent off` — disable agent mode
+    /// - `/agent <path>` — set working directory and enable agent mode
+    private func handleAgentCommand(_ text: String, threadIndex idx: Int) {
+        let parts = text.split(separator: " ", maxSplits: 1)
+        let argument = parts.count > 1 ? String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines) : nil
+
+        draft = ""
+
+        if let argument {
+            if argument.lowercased() == "off" {
+                threads[idx].agentEnabled = false
+                toastManager.show(.info("Agent mode disabled"))
+                return
+            }
+
+            // Treat argument as a path
+            let path: String
+            if argument.hasPrefix("~") {
+                path = (argument as NSString).expandingTildeInPath
+            } else if argument.hasPrefix("/") {
+                path = argument
+            } else {
+                // Relative to current working directory if one is set, otherwise home
+                if let current = threads[idx].workingDirectory {
+                    path = (current as NSString).appendingPathComponent(argument)
+                } else {
+                    path = (NSHomeDirectory() as NSString).appendingPathComponent(argument)
+                }
+            }
+
+            // Verify the directory exists
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue {
+                threads[idx].workingDirectory = path
+                threads[idx].agentEnabled = true
+                let abbreviated = abbreviatePathForToast(path)
+                toastManager.show(.success("Agent mode ON \u{2022} \(abbreviated)"))
+            } else {
+                toastManager.show(.error("Directory not found: \(argument)"))
+            }
+        } else {
+            // No argument — toggle
+            if threads[idx].agentEnabled {
+                threads[idx].agentEnabled = false
+                toastManager.show(.info("Agent mode disabled"))
+            } else if threads[idx].workingDirectory != nil {
+                threads[idx].agentEnabled = true
+                let abbreviated = abbreviatePathForToast(threads[idx].workingDirectory!)
+                toastManager.show(.success("Agent mode ON \u{2022} \(abbreviated)"))
+            } else {
+                // No directory set — show folder picker
+                isShowingAgentDirectoryPicker = true
+            }
+        }
+    }
+
+    private func abbreviatePathForToast(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        if path.hasPrefix(home) {
+            return "~" + path.dropFirst(home.count)
+        }
+        return path
+    }
+
     // MARK: - Tool-Use Streaming Loop
 
     /// Performs the streaming loop: sends to LLM, handles tool calls, re-sends with results.
-    /// Loops until the LLM produces a response with no tool calls (max 10 iterations).
+    /// Loops until the LLM produces a response with no tool calls.
+    /// In agent mode: merges built-in tools, prepends system prompt, routes execution, max 25 iterations.
     @MainActor
     private func performStreamingLoop(
         threadID: UUID,
@@ -842,14 +1003,22 @@ struct ContentView: View {
         model: LLMModel,
         apiKey: String
     ) async {
-        let maxToolIterations = 5
+        guard let idx = threads.firstIndex(where: { $0.id == threadID }) else { return }
+        let isAgent = threads[idx].agentEnabled
+        let workDir = threads[idx].workingDirectory
+        let maxToolIterations = isAgent ? 25 : 5
         var previousToolCallSignature: String? = nil
+
+        // Merge tools: MCP tools + built-in agent tools (if agent mode is on)
+        let availableTools: [MCPTool] = isAgent
+            ? mcpManager.tools + AgentTools.definitions()
+            : mcpManager.tools
 
         for _ in 0..<maxToolIterations {
             // Build history from current thread messages
-            guard let idx = threads.firstIndex(where: { $0.id == threadID }) else { return }
+            guard let currentIdx = threads.firstIndex(where: { $0.id == threadID }) else { return }
 
-            let history = threads[idx].messages.map { message -> LLMChatMessage in
+            var history = threads[currentIdx].messages.map { message -> LLMChatMessage in
                 let role: ChatRole = {
                     switch message.role {
                     case .user: return .user
@@ -878,9 +1047,21 @@ struct ContentView: View {
                 )
             }
 
+            // Prepend agent system prompt (invisible in UI, only sent to LLM)
+            if isAgent, let dir = workDir {
+                let systemMsg = LLMChatMessage(
+                    role: .system,
+                    content: AgentTools.systemPrompt(workingDirectory: dir),
+                    attachments: [],
+                    toolCalls: [],
+                    toolResult: nil
+                )
+                history.insert(systemMsg, at: 0)
+            }
+
             // Create assistant placeholder
             let assistantID = UUID()
-            threads[idx].messages.append(
+            threads[currentIdx].messages.append(
                 ChatMessage(id: assistantID, role: .assistant, text: "", timestamp: .now)
             )
             streamingMessageID = assistantID
@@ -890,17 +1071,13 @@ struct ContentView: View {
                     history: history,
                     modelID: model.modelID,
                     apiKey: apiKey,
-                    tools: mcpManager.tools
+                    tools: availableTools
                 ) { event in
                     await MainActor.run {
                         switch event {
                         case .textDelta(let delta):
                             appendStreamDelta(delta, to: assistantID, in: threadID)
                         case .toolCallStart(_, _, _):
-                            // Append visual indicator that a tool is being called
-                            if messageText(for: assistantID, in: threadID).isEmpty {
-                                // Will be replaced once we have the full tool call info
-                            }
                             break
                         case .toolCallArgumentDelta(_, _):
                             break
@@ -915,7 +1092,6 @@ struct ContentView: View {
                     // Detect repeated identical tool calls to prevent infinite loops
                     let currentSignature = result.toolCalls.map { "\($0.name):\($0.arguments)" }.joined(separator: "|")
                     if currentSignature == previousToolCallSignature {
-                        // Model is repeating the same tool call — break out
                         if messageText(for: assistantID, in: threadID).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             setMessageText("The model repeated the same tool call. Stopping to prevent a loop.", for: assistantID, in: threadID)
                         }
@@ -929,9 +1105,9 @@ struct ContentView: View {
                         return
                     }
 
-                    // Map tool call server names from MCPTool registry
+                    // Map tool call server names from tool registry
                     let resolvedToolCalls = result.toolCalls.map { tc -> ChatMessage.ToolCall in
-                        let serverName = mcpManager.tools.first(where: { $0.name == tc.name })?.serverName ?? ""
+                        let serverName = availableTools.first(where: { $0.name == tc.name })?.serverName ?? ""
                         return ChatMessage.ToolCall(id: tc.id, name: tc.name, arguments: tc.arguments, serverName: serverName)
                     }
                     threads[threadIdx].messages[msgIdx].toolCalls = resolvedToolCalls
@@ -940,28 +1116,67 @@ struct ContentView: View {
                     for tc in resolvedToolCalls {
                         let toolResultText: String
 
-                        do {
-                            // Parse arguments
-                            let args: [String: Any]
-                            if let data = tc.arguments.data(using: .utf8),
-                               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                                args = dict
+                        // Parse arguments
+                        let args: [String: Any]
+                        if let data = tc.arguments.data(using: .utf8),
+                           let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                            args = dict
+                        } else {
+                            args = [:]
+                        }
+
+                        if AgentTools.isBuiltIn(serverName: tc.serverName) {
+                            // Built-in agent tool
+                            if AgentTools.isDestructive(tc.name) {
+                                // Destructive tool — ask for user confirmation
+                                let approved = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                                    pendingToolConfirmation = PendingToolConfirmation(
+                                        toolName: tc.name,
+                                        arguments: args,
+                                        displaySummary: PendingToolConfirmation.summary(toolName: tc.name, arguments: args),
+                                        continuation: continuation
+                                    )
+                                }
+
+                                if approved {
+                                    do {
+                                        toolResultText = try await agentToolExecutor.execute(
+                                            toolName: tc.name,
+                                            arguments: args,
+                                            workingDirectory: workDir ?? "."
+                                        )
+                                    } catch {
+                                        toolResultText = "Error: \(error.localizedDescription)"
+                                    }
+                                } else {
+                                    toolResultText = "User denied this operation."
+                                }
                             } else {
-                                args = [:]
+                                // Non-destructive tool — auto-execute
+                                do {
+                                    toolResultText = try await agentToolExecutor.execute(
+                                        toolName: tc.name,
+                                        arguments: args,
+                                        workingDirectory: workDir ?? "."
+                                    )
+                                } catch {
+                                    toolResultText = "Error: \(error.localizedDescription)"
+                                }
                             }
-
-                            let mcpResult = try await mcpManager.callTool(
-                                serverName: tc.serverName,
-                                toolName: tc.name,
-                                arguments: args
-                            )
-
-                            // Concatenate text content from the result
-                            toolResultText = mcpResult.content
-                                .compactMap { $0.text }
-                                .joined(separator: "\n")
-                        } catch {
-                            toolResultText = "Error executing tool: \(error.localizedDescription)"
+                        } else {
+                            // MCP tool — existing path
+                            do {
+                                let mcpResult = try await mcpManager.callTool(
+                                    serverName: tc.serverName,
+                                    toolName: tc.name,
+                                    arguments: args
+                                )
+                                toolResultText = mcpResult.content
+                                    .compactMap { $0.text }
+                                    .joined(separator: "\n")
+                            } catch {
+                                toolResultText = "Error executing tool: \(error.localizedDescription)"
+                            }
                         }
 
                         // Add tool result message to thread
@@ -1051,5 +1266,124 @@ struct ContentView: View {
             return ""
         }
         return threads[threadIndex].messages[messageIndex].text
+    }
+
+    // MARK: - Tool Confirmation Overlay
+
+    @ViewBuilder
+    private func toolConfirmationOverlay(_ confirmation: PendingToolConfirmation) -> some View {
+        ZStack {
+            // Dimmed background
+            Color.black.opacity(0.4)
+                .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                // Header
+                HStack(spacing: 8) {
+                    Image(systemName: confirmationIcon(for: confirmation.toolName))
+                        .font(.system(size: 16))
+                        .foregroundStyle(.orange)
+
+                    Text("Confirm Action")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(theme.textPrimary)
+
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
+
+                theme.divider.frame(height: 1)
+
+                // Tool details
+                VStack(alignment: .leading, spacing: 8) {
+                    // Tool name
+                    HStack(spacing: 6) {
+                        Text("Tool:")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(theme.textSecondary)
+                        Text(AgentToolName(rawValue: confirmation.toolName)?.displayName ?? confirmation.toolName)
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(theme.accent)
+                    }
+
+                    // Summary
+                    Text(confirmation.displaySummary)
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(theme.textPrimary)
+                        .textSelection(.enabled)
+                        .lineLimit(6)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(theme.codeBackground, in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(theme.codeBorder, lineWidth: 1)
+                        )
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+
+                theme.divider.frame(height: 1)
+
+                // Action buttons
+                HStack(spacing: 10) {
+                    Spacer()
+
+                    Button {
+                        let cont = confirmation.continuation
+                        pendingToolConfirmation = nil
+                        cont.resume(returning: false)
+                    } label: {
+                        Text("Deny")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(theme.textSecondary)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 7)
+                            .background(theme.composerBackground, in: RoundedRectangle(cornerRadius: 8))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(theme.composerBorder, lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.escape, modifiers: [])
+
+                    Button {
+                        let cont = confirmation.continuation
+                        pendingToolConfirmation = nil
+                        cont.resume(returning: true)
+                    } label: {
+                        Text("Allow")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 7)
+                            .background(.orange, in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.return, modifiers: [])
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+            }
+            .frame(width: 420)
+            .background(theme.background, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(theme.composerBorder, lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.3), radius: 20, y: 5)
+        }
+    }
+
+    private func confirmationIcon(for toolName: String) -> String {
+        switch toolName {
+        case "write_file": return "doc.badge.plus"
+        case "edit_file": return "pencil.line"
+        case "run_command": return "terminal"
+        default: return "exclamationmark.triangle"
+        }
     }
 }

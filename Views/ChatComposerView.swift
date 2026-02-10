@@ -4,6 +4,8 @@ import UniformTypeIdentifiers
 struct ChatComposerView: View {
     @Binding var draft: String
     @Binding var attachments: [Attachment]
+    @Binding var agentEnabled: Bool
+    @Binding var workingDirectory: String?
     let isSending: Bool
     let canSend: Bool
     let onSend: () -> Void
@@ -12,6 +14,7 @@ struct ChatComposerView: View {
     @Environment(\.appTheme) private var theme
     @FocusState private var isFocused: Bool
     @State private var isShowingFilePicker = false
+    @State private var isShowingDirectoryPicker = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -34,7 +37,7 @@ struct ChatComposerView: View {
                         .focused($isFocused)
 
                     if draft.isEmpty && attachments.isEmpty {
-                        Text("Enter a message here, press \u{21B5} to send")
+                        Text("Message (\u{21B5} to send) \u{2022} /agent <path> to enable agent mode")
                             .font(.system(size: 14))
                             .foregroundStyle(theme.textTertiary)
                             .allowsHitTesting(false)
@@ -46,7 +49,7 @@ struct ChatComposerView: View {
                 .padding(.top, 10)
                 .padding(.bottom, 4)
 
-                // Bottom bar: attach + stop
+                // Bottom bar: attach + agent toggle + stop
                 HStack(spacing: 8) {
                     Button {
                         isShowingFilePicker = true
@@ -56,7 +59,49 @@ struct ChatComposerView: View {
                             .foregroundStyle(theme.textSecondary)
                     }
                     .buttonStyle(.plain)
-                    .help("Attach file")
+                    .help("Attach file (images, text, code)")
+
+                    // Agent mode toggle
+                    Button {
+                        if agentEnabled {
+                            agentEnabled = false
+                        } else {
+                            if workingDirectory == nil {
+                                isShowingDirectoryPicker = true
+                            } else {
+                                agentEnabled = true
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "terminal")
+                            .font(.system(size: 14))
+                            .foregroundStyle(agentEnabled ? theme.accent : theme.textSecondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help(agentEnabled
+                        ? "Agent mode ON — click to disable"
+                        : "Enable agent mode (or type /agent <path>)")
+
+                    // Working directory chip (shown when agent mode is on)
+                    if agentEnabled, let dir = workingDirectory {
+                        Button {
+                            isShowingDirectoryPicker = true
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "folder")
+                                    .font(.system(size: 10))
+                                Text(abbreviatePath(dir))
+                                    .font(.system(size: 11))
+                                    .lineLimit(1)
+                            }
+                            .foregroundStyle(theme.accent)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(theme.accent.opacity(0.12), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Working directory — click to change")
+                    }
 
                     Spacer()
 
@@ -70,7 +115,7 @@ struct ChatComposerView: View {
                         }
                         .buttonStyle(.plain)
                         .keyboardShortcut(.escape, modifiers: [])
-                        .help("Stop (Esc)")
+                        .help("Stop generation (Esc)")
                     }
                 }
                 .padding(.horizontal, 14)
@@ -104,6 +149,13 @@ struct ChatComposerView: View {
             allowsMultipleSelection: true
         ) { result in
             handleFilePick(result)
+        }
+        .fileImporter(
+            isPresented: $isShowingDirectoryPicker,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            handleDirectoryPick(result)
         }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             handleDrop(providers)
@@ -180,6 +232,27 @@ struct ChatComposerView: View {
                 }
             }
         }
+    }
+
+    private func handleDirectoryPick(_ result: Result<[URL], Error>) {
+        guard case .success(let urls) = result, let url = urls.first else { return }
+        let path = url.path
+        workingDirectory = path
+        agentEnabled = true
+    }
+
+    /// Abbreviate a path for display (e.g. /Users/name/Projects/foo -> ~/Projects/foo)
+    private func abbreviatePath(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        if path.hasPrefix(home) {
+            return "~" + path.dropFirst(home.count)
+        }
+        // Show only last 2 path components if long
+        let components = path.split(separator: "/")
+        if components.count > 3 {
+            return ".../" + components.suffix(2).joined(separator: "/")
+        }
+        return path
     }
 }
 
