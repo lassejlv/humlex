@@ -507,7 +507,6 @@ struct ContentView: View {
             shortcut: "U"
         ) {
             appUpdater.checkForUpdates()
-            toastManager.show(.info("Checking for updates...", icon: "arrow.triangle.2.circlepath"))
         })
 
         // Theme picker - shows theme options when searched

@@ -832,6 +832,18 @@ struct SettingsView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 12) {
+            Button {
+                appUpdater.checkForUpdates()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 11))
+                    Text("Check for Updates")
+                        .font(.system(size: 12, weight: .medium))
+                }
+            }
+            .disabled(!appUpdater.canCheckForUpdates)
+
             if let statusMessage {
                 Text(statusMessage)
                     .font(.system(size: 11))

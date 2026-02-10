@@ -119,59 +119,65 @@ jobs:
 
           mkdir -p docs
 
-          cat > docs/appcast.xml << 'APPCAST_HEADER'
-          <?xml version="1.0" encoding="utf-8"?>
-          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+          python3 -c "
+          version = '${VERSION}'
+          tag = '${TAG}'
+          date = '${DATE}'
+          repo = '${REPO_URL}'
+          arm64_sig = '${{ steps.sigs.outputs.arm64_sig }}'
+          arm64_len = '${{ steps.sigs.outputs.arm64_len }}'
+          x86_sig = '${{ steps.sigs.outputs.x86_sig }}'
+          x86_len = '${{ steps.sigs.outputs.x86_len }}'
+
+          xml = '''<?xml version=\"1.0\" encoding=\"utf-8\"?>
+          <rss version=\"2.0\" xmlns:sparkle=\"http://www.andymatuschak.org/xml-namespaces/sparkle\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">
             <channel>
               <title>Humlex Updates</title>
               <link>https://raw.githubusercontent.com/lassejlv/humlex/main/docs/appcast.xml</link>
               <description>Most recent updates to Humlex</description>
               <language>en</language>
-          APPCAST_HEADER
-
-          # arm64 item
-          cat >> docs/appcast.xml << EOF
               <item>
-                <title>Version ${VERSION} (Apple Silicon)</title>
-                <pubDate>${DATE}</pubDate>
-                <sparkle:version>${VERSION}</sparkle:version>
-                <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
+                <title>Version {version} (Apple Silicon)</title>
+                <pubDate>{date}</pubDate>
+                <sparkle:version>{version}</sparkle:version>
+                <sparkle:shortVersionString>{version}</sparkle:shortVersionString>
                 <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
                 <enclosure
-                  url="${REPO_URL}/releases/download/${TAG}/Humlex-${VERSION}-arm64.dmg"
-                  sparkle:edSignature="${{ steps.sigs.outputs.arm64_sig }}"
-                  length="${{ steps.sigs.outputs.arm64_len }}"
-                  type="application/octet-stream"
-                  sparkle:os="macos"
+                  url=\"{repo}/releases/download/{tag}/Humlex-{version}-arm64.dmg\"
+                  sparkle:edSignature=\"{arm64_sig}\"
+                  length=\"{arm64_len}\"
+                  type=\"application/octet-stream\"
+                  sparkle:os=\"macos\"
                 />
               </item>
-          EOF
-
-          # x86_64 item
-          cat >> docs/appcast.xml << EOF
               <item>
-                <title>Version ${VERSION} (Intel)</title>
-                <pubDate>${DATE}</pubDate>
-                <sparkle:version>${VERSION}</sparkle:version>
-                <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
+                <title>Version {version} (Intel)</title>
+                <pubDate>{date}</pubDate>
+                <sparkle:version>{version}</sparkle:version>
+                <sparkle:shortVersionString>{version}</sparkle:shortVersionString>
                 <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
                 <enclosure
-                  url="${REPO_URL}/releases/download/${TAG}/Humlex-${VERSION}-x86_64.dmg"
-                  sparkle:edSignature="${{ steps.sigs.outputs.x86_sig }}"
-                  length="${{ steps.sigs.outputs.x86_len }}"
-                  type="application/octet-stream"
-                  sparkle:os="macos"
+                  url=\"{repo}/releases/download/{tag}/Humlex-{version}-x86_64.dmg\"
+                  sparkle:edSignature=\"{x86_sig}\"
+                  length=\"{x86_len}\"
+                  type=\"application/octet-stream\"
+                  sparkle:os=\"macos\"
                 />
               </item>
-          EOF
-
-          cat >> docs/appcast.xml << 'APPCAST_FOOTER'
             </channel>
-          </rss>
-          APPCAST_FOOTER
+          </rss>'''
 
-          echo "Generated appcast.xml:"
-          cat docs/appcast.xml
+          import textwrap
+          xml = textwrap.dedent(xml).strip()
+          xml = xml.format(
+              version=version, tag=tag, date=date, repo=repo,
+              arm64_sig=arm64_sig, arm64_len=arm64_len,
+              x86_sig=x86_sig, x86_len=x86_len
+          )
+          with open('docs/appcast.xml', 'w') as f:
+              f.write(xml + '\n')
+          print(xml)
+          "
 
       - name: Commit updated appcast.xml
         run: |
