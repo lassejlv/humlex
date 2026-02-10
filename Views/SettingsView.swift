@@ -30,6 +30,7 @@ struct SettingsView: View {
     let onClose: () -> Void
 
     @EnvironmentObject private var themeManager: ThemeManager
+    @EnvironmentObject private var appUpdater: AppUpdater
     @Environment(\.appTheme) private var theme
     @ObservedObject private var mcpManager = MCPManager.shared
 
