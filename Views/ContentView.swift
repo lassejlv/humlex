@@ -49,6 +49,7 @@ struct ContentView: View {
     @State private var persistWorkItem: DispatchWorkItem?
     @State private var streamingTask: Task<Void, Never>?
     @State private var threadToDelete: ChatThread?
+    @State private var isCommandPaletteOpen: Bool = false
     @EnvironmentObject private var themeManager: ThemeManager
     @Environment(\.appTheme) private var theme
     @Environment(\.toastManager) private var toastManager
@@ -334,6 +335,172 @@ struct ContentView: View {
         .onChange(of: threads) { _, newValue in
             schedulePersist(newValue)
         }
+        .overlay {
+            CommandPaletteOverlay(
+                isPresented: $isCommandPaletteOpen,
+                actions: commandPaletteActions
+            )
+        }
+        .commandPaletteShortcut(isPresented: $isCommandPaletteOpen)
+    }
+
+    // MARK: - Command Palette Actions
+
+    private var commandPaletteActions: [CommandAction] {
+        var actions: [CommandAction] = []
+
+        // New Chat
+        actions.append(CommandAction(
+            title: "New Chat",
+            subtitle: "Start a fresh conversation",
+            icon: "square.and.pencil",
+            shortcut: "N"
+        ) {
+            createThread()
+            toastManager.show(.success("New chat created", icon: "square.and.pencil"))
+        })
+
+        // Current chat actions (if a thread is selected)
+        if let threadID = selectedThreadID,
+           let thread = threads.first(where: { $0.id == threadID }) {
+            actions.append(CommandAction(
+                title: "Export Current Chat",
+                subtitle: "Save \"\(thread.title)\" as Markdown",
+                icon: "doc.text",
+                shortcut: "E"
+            ) {
+                exportThreadToMarkdown(thread)
+            })
+
+            actions.append(CommandAction(
+                title: "Delete Current Chat",
+                subtitle: "Remove \"\(thread.title)\"",
+                icon: "trash",
+                shortcut: "D"
+            ) {
+                threadToDelete = thread
+            })
+        }
+
+        // Settings
+        actions.append(CommandAction(
+            title: "Open Settings",
+            subtitle: "Configure API keys and theme",
+            icon: "gearshape",
+            shortcut: ","
+        ) {
+            isShowingSettings = true
+            toastManager.show(.info("Settings opened", icon: "gearshape"))
+        })
+
+        // Model picker
+        actions.append(CommandAction(
+            title: "Change Model",
+            subtitle: selectedModelLabel,
+            icon: "cpu",
+            shortcut: "M"
+        ) {
+            isShowingModelPicker = true
+            toastManager.show(.info("Model picker opened", icon: "cpu"))
+        })
+
+        // Fetch models
+        actions.append(CommandAction(
+            title: "Fetch Models",
+            subtitle: "Refresh available models from providers",
+            icon: "arrow.clockwise",
+            shortcut: "R"
+        ) {
+            toastManager.show(.info("Fetching models...", icon: "arrow.clockwise"))
+            Task { await fetchModels() }
+        })
+
+        // Theme picker - shows theme options when searched
+        actions.append(CommandAction(
+            title: "Theme: System",
+            subtitle: themeManager.current.id == "system" ? "Currently active" : "Use macOS appearance",
+            icon: "circle.lefthalf.filled"
+        ) {
+            themeManager.select(.system)
+            toastManager.show(.success("Switched to System theme", icon: "circle.lefthalf.filled"))
+        })
+
+        actions.append(CommandAction(
+            title: "Theme: Tokyo Night",
+            subtitle: themeManager.current.id == "tokyo-night" ? "Currently active" : "Dark theme inspired by Tokyo",
+            icon: "moon.stars"
+        ) {
+            themeManager.select(.tokyoNight)
+            toastManager.show(.success("Switched to Tokyo Night", icon: "moon.stars"))
+        })
+
+        actions.append(CommandAction(
+            title: "Theme: Tokyo Night Storm",
+            subtitle: themeManager.current.id == "tokyo-night-storm" ? "Currently active" : "Lighter Tokyo Night variant",
+            icon: "cloud.moon"
+        ) {
+            themeManager.select(.tokyoNightStorm)
+            toastManager.show(.success("Switched to Tokyo Night Storm", icon: "cloud.moon"))
+        })
+
+        actions.append(CommandAction(
+            title: "Theme: Catppuccin Mocha",
+            subtitle: themeManager.current.id == "catppuccin-mocha" ? "Currently active" : "Warm pastel dark theme",
+            icon: "cup.and.saucer"
+        ) {
+            themeManager.select(.catppuccinMocha)
+            toastManager.show(.success("Switched to Catppuccin Mocha", icon: "cup.and.saucer"))
+        })
+
+        actions.append(CommandAction(
+            title: "Theme: GitHub Dark",
+            subtitle: themeManager.current.id == "github-dark" ? "Currently active" : "Clean GitHub-style dark theme",
+            icon: "chevron.left.forwardslash.chevron.right"
+        ) {
+            themeManager.select(.githubDark)
+            toastManager.show(.success("Switched to GitHub Dark", icon: "chevron.left.forwardslash.chevron.right"))
+        })
+
+        // Stop streaming
+        if streamingTask != nil {
+            actions.insert(CommandAction(
+                title: "Stop Generation",
+                subtitle: "Cancel the current response",
+                icon: "stop.circle",
+                shortcut: "."
+            ) {
+                stopStreaming()
+                toastManager.show(.info("Generation stopped", icon: "stop.circle"))
+            }, at: 0)
+        }
+
+        // Copy last response
+        if let threadID = selectedThreadID,
+           let thread = threads.first(where: { $0.id == threadID }),
+           let lastAssistant = thread.messages.last(where: { $0.role == .assistant }) {
+            actions.append(CommandAction(
+                title: "Copy Last Response",
+                subtitle: "Copy assistant's last message",
+                icon: "doc.on.doc"
+            ) {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(lastAssistant.text, forType: .string)
+                toastManager.show(.success("Copied to clipboard", icon: "doc.on.doc"))
+            })
+        }
+
+        // Clear all chats
+        actions.append(CommandAction(
+            title: "Clear All Chats",
+            subtitle: "Remove all conversations",
+            icon: "trash.fill"
+        ) {
+            threads = [ChatThread(id: UUID(), title: "New Chat", messages: [])]
+            selectedThreadID = threads.first?.id
+            toastManager.show(.success("All chats cleared", icon: "trash"))
+        })
+
+        return actions
     }
 
     private var modelMenu: some View {
@@ -791,159 +958,4 @@ struct ContentView: View {
         }
         return threads[threadIndex].messages[messageIndex].text
     }
-}
-
-struct ModelPickerPopover: View {
-    let models: [LLMModel]
-    @Binding var selectedModelReference: String
-    @Binding var searchText: String
-    @Binding var isPresented: Bool
-
-    @Environment(\.appTheme) private var theme
-
-    private var filteredModels: [LLMModel] {
-        if searchText.isEmpty { return models }
-        return models.filter {
-            $0.displayName.localizedCaseInsensitiveContains(searchText) ||
-            $0.modelID.localizedCaseInsensitiveContains(searchText) ||
-            $0.provider.rawValue.localizedCaseInsensitiveContains(searchText)
-        }
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            searchField
-            theme.divider.frame(height: 1)
-            modelList
-        }
-        .frame(width: 320, height: 400)
-        .background(theme.surfaceBackground)
-    }
-
-    private var searchField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(theme.textSecondary)
-                .font(.system(size: 12))
-            TextField("Search models...", text: $searchText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .foregroundStyle(theme.textPrimary)
-            if !searchText.isEmpty {
-                Button {
-                    searchText = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(theme.textSecondary)
-                        .font(.system(size: 12))
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-    }
-
-    private var modelList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                if filteredModels.isEmpty {
-                    Text("No models found")
-                        .font(.system(size: 12))
-                        .foregroundStyle(theme.textSecondary)
-                        .padding(12)
-                } else {
-                    ForEach(AIProvider.allCases) { provider in
-                        providerSection(provider)
-                    }
-                }
-            }
-            .padding(.vertical, 4)
-        }
-    }
-
-    @ViewBuilder
-    private func providerSection(_ provider: AIProvider) -> some View {
-        let providerModels = filteredModels.filter { $0.provider == provider }
-            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
-        if !providerModels.isEmpty {
-            HStack(spacing: 6) {
-                ProviderIcon(slug: provider.iconSlug, size: 14)
-                    .foregroundStyle(theme.textSecondary)
-                Text(provider.rawValue)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(theme.textSecondary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 10)
-            .padding(.bottom, 4)
-
-            ForEach(providerModels) { model in
-                modelRow(model)
-            }
-        }
-    }
-
-    private func modelRow(_ model: LLMModel) -> some View {
-        let isSelected = model.reference == selectedModelReference
-        return Button {
-            selectedModelReference = model.reference
-            isPresented = false
-            searchText = ""
-        } label: {
-            HStack(spacing: 8) {
-                if let slug = modelIconSlug(for: model.modelID) {
-                    ProviderIcon(slug: slug, size: 14)
-                        .foregroundStyle(theme.textSecondary)
-                }
-                Text(model.displayName)
-                    .font(.system(size: 13))
-                    .foregroundStyle(theme.textPrimary)
-                    .lineLimit(1)
-                Spacer()
-                if isSelected {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(theme.accent)
-                }
-            }
-            .contentShape(Rectangle())
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(
-                isSelected ? theme.selectionBackground : Color.clear,
-                in: RoundedRectangle(cornerRadius: 6)
-            )
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 4)
-    }
-}
-
-struct ThreadRow: View {
-    let thread: ChatThread
-    let isSelected: Bool
-
-    @Environment(\.appTheme) private var theme
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(thread.title)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(theme.textPrimary)
-                .lineLimit(1)
-
-            if let lastMessage = thread.messages.last {
-                Text(lastMessage.text)
-                    .font(.system(size: 11))
-                    .foregroundStyle(theme.textSecondary)
-                    .lineLimit(1)
-            }
-        }
-        .padding(.vertical, 4)
-    }
-}
-
-#Preview {
-    ContentView()
 }
