@@ -34,21 +34,152 @@ jobs:
           chmod +x build-dmg.sh
           ./build-dmg.sh "${{ steps.version.outputs.version }}" "${{ matrix.arch }}"
 
+      - name: Download Sparkle CLI tools
+        run: |
+          curl -sL "https://github.com/sparkle-project/Sparkle/releases/download/2.8.1/Sparkle-2.8.1.tar.xz" -o /tmp/Sparkle.tar.xz
+          mkdir -p /tmp/Sparkle
+          tar -xf /tmp/Sparkle.tar.xz -C /tmp/Sparkle
+
+      - name: Sign DMG with Sparkle EdDSA
+        id: sign
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          DMG_PATH=".build/Humlex-${{ steps.version.outputs.version }}-${{ matrix.arch }}.dmg"
+          SIGN_TOOL="/tmp/Sparkle/bin/sign_update"
+
+          # Sign the DMG and capture the signature output
+          SIGN_OUTPUT=$(echo "$SPARKLE_PRIVATE_KEY" | "$SIGN_TOOL" "$DMG_PATH" -f -)
+          echo "Signature output: $SIGN_OUTPUT"
+
+          # Parse edSignature and length from the output
+          ED_SIGNATURE=$(echo "$SIGN_OUTPUT" | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p')
+          FILE_LENGTH=$(wc -c < "$DMG_PATH" | tr -d ' ')
+
+          echo "ed_signature=$ED_SIGNATURE" >> "$GITHUB_OUTPUT"
+          echo "file_length=$FILE_LENGTH" >> "$GITHUB_OUTPUT"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: Humlex-${{ steps.version.outputs.version }}-${{ matrix.arch }}
           path: .build/Humlex-${{ steps.version.outputs.version }}-${{ matrix.arch }}.dmg
 
+      - name: Save signature info
+        run: |
+          mkdir -p .build/signatures
+          echo '${{ steps.sign.outputs.ed_signature }}' > .build/signatures/${{ matrix.arch }}-signature.txt
+          echo '${{ steps.sign.outputs.file_length }}' > .build/signatures/${{ matrix.arch }}-length.txt
+
+      - name: Upload signature info
+        uses: actions/upload-artifact@v4
+        with:
+          name: signature-${{ matrix.arch }}
+          path: .build/signatures/
+
   release:
     needs: build
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+
+      - name: Read signatures
+        id: sigs
+        run: |
+          ARM64_SIG=$(cat artifacts/signature-arm64/arm64-signature.txt)
+          ARM64_LEN=$(cat artifacts/signature-arm64/arm64-length.txt)
+          X86_SIG=$(cat artifacts/signature-x86_64/x86_64-signature.txt)
+          X86_LEN=$(cat artifacts/signature-x86_64/x86_64-length.txt)
+
+          echo "arm64_sig=$ARM64_SIG" >> "$GITHUB_OUTPUT"
+          echo "arm64_len=$ARM64_LEN" >> "$GITHUB_OUTPUT"
+          echo "x86_sig=$X86_SIG" >> "$GITHUB_OUTPUT"
+          echo "x86_len=$X86_LEN" >> "$GITHUB_OUTPUT"
+
+      - name: Generate appcast.xml
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${GITHUB_REF_NAME}"
+          DATE=$(date -u +"%a, %d %b %Y %H:%M:%S %z")
+          REPO_URL="https://github.com/lassejlv/humlex"
+
+          mkdir -p docs
+
+          cat > docs/appcast.xml << 'APPCAST_HEADER'
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+            <channel>
+              <title>Humlex Updates</title>
+              <link>https://raw.githubusercontent.com/lassejlv/humlex/main/docs/appcast.xml</link>
+              <description>Most recent updates to Humlex</description>
+              <language>en</language>
+          APPCAST_HEADER
+
+          # arm64 item
+          cat >> docs/appcast.xml << EOF
+              <item>
+                <title>Version ${VERSION} (Apple Silicon)</title>
+                <pubDate>${DATE}</pubDate>
+                <sparkle:version>${VERSION}</sparkle:version>
+                <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+                <enclosure
+                  url="${REPO_URL}/releases/download/${TAG}/Humlex-${VERSION}-arm64.dmg"
+                  sparkle:edSignature="${{ steps.sigs.outputs.arm64_sig }}"
+                  length="${{ steps.sigs.outputs.arm64_len }}"
+                  type="application/octet-stream"
+                  sparkle:os="macos"
+                />
+              </item>
+          EOF
+
+          # x86_64 item
+          cat >> docs/appcast.xml << EOF
+              <item>
+                <title>Version ${VERSION} (Intel)</title>
+                <pubDate>${DATE}</pubDate>
+                <sparkle:version>${VERSION}</sparkle:version>
+                <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+                <enclosure
+                  url="${REPO_URL}/releases/download/${TAG}/Humlex-${VERSION}-x86_64.dmg"
+                  sparkle:edSignature="${{ steps.sigs.outputs.x86_sig }}"
+                  length="${{ steps.sigs.outputs.x86_len }}"
+                  type="application/octet-stream"
+                  sparkle:os="macos"
+                />
+              </item>
+          EOF
+
+          cat >> docs/appcast.xml << 'APPCAST_FOOTER'
+            </channel>
+          </rss>
+          APPCAST_FOOTER
+
+          echo "Generated appcast.xml:"
+          cat docs/appcast.xml
+
+      - name: Commit updated appcast.xml
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/appcast.xml
+          git commit -m "Update appcast.xml for ${{ github.ref_name }}" || echo "No changes to commit"
+          git push origin main
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

@@ -11,6 +11,7 @@ import SwiftUI
 struct AI_ChatApp: App {
     @StateObject private var themeManager = ThemeManager.shared
     @StateObject private var toastManager = ToastManager.shared
+    @StateObject private var appUpdater = AppUpdater()
 
     var body: some Scene {
         WindowGroup {
@@ -22,6 +23,7 @@ struct AI_ChatApp: App {
                 .environment(\.toastManager, toastManager)
                 .environmentObject(themeManager)
                 .environmentObject(toastManager)
+                .environmentObject(appUpdater)
                 .onAppear {
                     updateAppearance(for: themeManager.current)
                 }

@@ -57,6 +57,7 @@ struct ContentView: View {
     @State private var isShowingUndoPanel = false
     @StateObject private var mcpManager = MCPManager.shared
     @EnvironmentObject private var themeManager: ThemeManager
+    @EnvironmentObject private var appUpdater: AppUpdater
     @Environment(\.appTheme) private var theme
     @Environment(\.toastManager) private var toastManager
 
@@ -503,6 +504,17 @@ struct ContentView: View {
         ) {
             toastManager.show(.info("Fetching models...", icon: "arrow.clockwise"))
             Task { await fetchModels() }
+        })
+
+        // Check for Updates
+        actions.append(CommandAction(
+            title: "Check for Updates",
+            subtitle: "Check for a new version of Humlex",
+            icon: "arrow.triangle.2.circlepath",
+            shortcut: "U"
+        ) {
+            appUpdater.checkForUpdates()
+            toastManager.show(.info("Checking for updates...", icon: "arrow.triangle.2.circlepath"))
         })
 
         // Theme picker - shows theme options when searched
