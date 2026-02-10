@@ -12,6 +12,15 @@ DMG_NAME="${APP_DISPLAY_NAME}-${VERSION}-${ARCH}.dmg"
 DMG_DIR=".build/dmg"
 DMG_PATH=".build/${DMG_NAME}"
 ICON_SOURCE="assets/icon@1024px.png"
+UPDATER_CONFIG="config/updater.conf"
+
+if [ ! -f "${UPDATER_CONFIG}" ]; then
+    echo "Error: missing updater config at ${UPDATER_CONFIG}" >&2
+    exit 1
+fi
+
+# shellcheck disable=SC1090
+source "${UPDATER_CONFIG}"
 
 echo "=== Building ${APP_DISPLAY_NAME} v${VERSION} (${ARCH}) ==="
 echo ""
@@ -109,14 +118,18 @@ cat > "${CONTENTS_DIR}/Info.plist" <<PLIST
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>SUFeedURL</key>
-    <string>https://raw.githubusercontent.com/lassejlv/humlex/main/docs/appcast.xml</string>
+    <string>${SU_FEED_URL}</string>
     <key>SUPublicEDKey</key>
-    <string>8kpw38a9r7rrVsa9d5bhzEDZGoYX4yffaWedaydM/pA=</string>
+    <string>${SU_PUBLIC_ED_KEY}</string>
     <key>SUEnableAutomaticChecks</key>
     <true/>
 </dict>
 </plist>
 PLIST
+
+echo "[3.5/5] Re-signing app bundle..."
+codesign --force --deep --sign - "${APP_BUNDLE}"
+codesign --verify --deep --strict --verbose=2 "${APP_BUNDLE}"
 
 # ── 4. Build DMG staging area ────────────────────────────────────────
 echo "[4/5] Staging DMG contents..."

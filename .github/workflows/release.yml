@@ -27,6 +27,13 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
+      - name: Verify Sparkle keypair matches app public key
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          chmod +x scripts/verify-sparkle-keypair.sh
+          ./scripts/verify-sparkle-keypair.sh
+
       - name: Build DMG
         env:
           CI: "true"
@@ -52,9 +59,20 @@ jobs:
           SIGN_OUTPUT=$(echo "$SPARKLE_PRIVATE_KEY" | "$SIGN_TOOL" "$DMG_PATH" -f -)
           echo "Signature output: $SIGN_OUTPUT"
 
-          # Parse edSignature and length from the output
-          ED_SIGNATURE=$(echo "$SIGN_OUTPUT" | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p')
+          # Parse edSignature from sign_update output and fail hard if missing
+          ED_SIGNATURE=$(SIGN_OUTPUT="$SIGN_OUTPUT" python3 -c 'import os, re; m = re.search(r"sparkle:edSignature=\"([^\"]+)\"", os.environ.get("SIGN_OUTPUT", "")); print(m.group(1) if m else "")')
+
+          if [ -z "$ED_SIGNATURE" ]; then
+            echo "Failed to capture Sparkle signature" >&2
+            exit 1
+          fi
+
           FILE_LENGTH=$(wc -c < "$DMG_PATH" | tr -d ' ')
+
+          if [ -z "$FILE_LENGTH" ]; then
+            echo "Failed to capture DMG file length" >&2
+            exit 1
+          fi
 
           echo "ed_signature=$ED_SIGNATURE" >> "$GITHUB_OUTPUT"
           echo "file_length=$FILE_LENGTH" >> "$GITHUB_OUTPUT"
@@ -117,6 +135,10 @@ jobs:
           DATE=$(date -u +"%a, %d %b %Y %H:%M:%S %z")
           REPO_URL="https://github.com/lassejlv/humlex"
 
+          # shellcheck disable=SC1091
+          source config/updater.conf
+          FEED_URL="${SU_FEED_URL}"
+
           mkdir -p docs
 
           python3 -c "
@@ -124,6 +146,7 @@ jobs:
           tag = '${TAG}'
           date = '${DATE}'
           repo = '${REPO_URL}'
+          feed_url = '${FEED_URL}'
           arm64_sig = '${{ steps.sigs.outputs.arm64_sig }}'
           arm64_len = '${{ steps.sigs.outputs.arm64_len }}'
           x86_sig = '${{ steps.sigs.outputs.x86_sig }}'
@@ -133,7 +156,7 @@ jobs:
           <rss version=\"2.0\" xmlns:sparkle=\"http://www.andymatuschak.org/xml-namespaces/sparkle\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">
             <channel>
               <title>Humlex Updates</title>
-              <link>https://raw.githubusercontent.com/lassejlv/humlex/main/docs/appcast.xml</link>
+              <link>{feed_url}</link>
               <description>Most recent updates to Humlex</description>
               <language>en</language>
               <item>
@@ -170,7 +193,7 @@ jobs:
           import textwrap
           xml = textwrap.dedent(xml).strip()
           xml = xml.format(
-              version=version, tag=tag, date=date, repo=repo,
+              version=version, tag=tag, date=date, repo=repo, feed_url=feed_url,
               arm64_sig=arm64_sig, arm64_len=arm64_len,
               x86_sig=x86_sig, x86_len=x86_len
           )
@@ -178,6 +201,61 @@ jobs:
               f.write(xml + '\n')
           print(xml)
           "
+
+      - name: Verify generated appcast metadata
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          ns = {"sparkle": "http://www.andymatuschak.org/xml-namespaces/sparkle"}
+          tree = ET.parse("docs/appcast.xml")
+          channel = tree.getroot().find("channel")
+          if channel is None:
+              raise SystemExit("appcast.xml missing <channel>")
+
+          items = channel.findall("item")
+          if len(items) != 2:
+              raise SystemExit(f"Expected 2 appcast items, found {len(items)}")
+
+          expected = {
+              "arm64": {
+                  "url_suffix": "-arm64.dmg",
+                  "sig": "${{ steps.sigs.outputs.arm64_sig }}",
+                  "len": "${{ steps.sigs.outputs.arm64_len }}",
+              },
+              "x86_64": {
+                  "url_suffix": "-x86_64.dmg",
+                  "sig": "${{ steps.sigs.outputs.x86_sig }}",
+                  "len": "${{ steps.sigs.outputs.x86_len }}",
+              },
+          }
+
+          for item in items:
+              enclosure = item.find("enclosure")
+              if enclosure is None:
+                  raise SystemExit("Found appcast item without enclosure")
+
+              url = enclosure.attrib.get("url", "")
+              sig = enclosure.attrib.get(f"{{{ns['sparkle']}}}edSignature", "")
+              length = enclosure.attrib.get("length", "")
+
+              matched_arch = None
+              for arch, values in expected.items():
+                  if url.endswith(values["url_suffix"]):
+                      matched_arch = arch
+                      break
+
+              if matched_arch is None:
+                  raise SystemExit(f"Unexpected enclosure URL in appcast: {url}")
+
+              values = expected[matched_arch]
+              if sig != values["sig"]:
+                  raise SystemExit(f"Signature mismatch for {matched_arch}")
+              if length != values["len"]:
+                  raise SystemExit(f"Length mismatch for {matched_arch}")
+
+          print("Appcast signature metadata verified.")
+          PY
 
       - name: Commit updated appcast.xml
         run: |

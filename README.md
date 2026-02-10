@@ -39,6 +39,12 @@ Builds a debug `.app` bundle and opens it.
 
 Builds an optimized `.app` and creates a styled `.dmg` installer (e.g., `Humlex-1.0-arm64.dmg`).
 
+Before cutting a release tag, verify your Sparkle keypair matches the public updater key:
+
+```sh
+SPARKLE_PRIVATE_KEY="<base64-private-key>" ./scripts/verify-sparkle-keypair.sh
+```
+
 **Manual:**
 
 ```sh
