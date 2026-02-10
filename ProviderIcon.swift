@@ -102,6 +102,7 @@ extension AIProvider {
     var iconSlug: String {
         switch self {
         case .openAI: return "openai"
+        case .anthropic: return "anthropic"
         case .openRouter: return "openrouter"
         case .vercelAI: return "vercel"
         case .gemini: return "google"

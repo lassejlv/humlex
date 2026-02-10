@@ -37,6 +37,7 @@ struct ContentView: View {
     @State private var draft: String = ""
     @State private var pendingAttachments: [Attachment] = []
     @State private var openAIAPIKey: String = ""
+    @State private var anthropicAPIKey: String = ""
     @State private var openRouterAPIKey: String = ""
     @State private var vercelAIAPIKey: String = ""
     @State private var geminiAPIKey: String = ""
@@ -47,8 +48,10 @@ struct ContentView: View {
     @State private var streamingMessageID: UUID?
     @State private var persistWorkItem: DispatchWorkItem?
     @State private var streamingTask: Task<Void, Never>?
+    @State private var threadToDelete: ChatThread?
     @EnvironmentObject private var themeManager: ThemeManager
     @Environment(\.appTheme) private var theme
+    @Environment(\.toastManager) private var toastManager
 
     private var selectedThreadIndex: Int? {
         guard let id = selectedThreadID else { return nil }
@@ -116,11 +119,16 @@ struct ContentView: View {
                             }
                             .buttonStyle(.plain)
                             .contextMenu {
+                                Button {
+                                    exportThreadToMarkdown(thread)
+                                } label: {
+                                    Label("Export to Markdown", systemImage: "doc.text")
+                                }
+                                
+                                Divider()
+                                
                                 Button(role: .destructive) {
-                                    threads.removeAll { $0.id == thread.id }
-                                    if selectedThreadID == thread.id {
-                                        selectedThreadID = threads.first?.id
-                                    }
+                                    threadToDelete = thread
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
@@ -246,6 +254,7 @@ struct ContentView: View {
         .sheet(isPresented: $isShowingSettings) {
             SettingsView(
                 openAIAPIKey: $openAIAPIKey,
+                anthropicAPIKey: $anthropicAPIKey,
                 openRouterAPIKey: $openRouterAPIKey,
                 vercelAIAPIKey: $vercelAIAPIKey,
                 geminiAPIKey: $geminiAPIKey,
@@ -257,6 +266,27 @@ struct ContentView: View {
             } onClose: {
                 isShowingSettings = false
             }
+        }
+        .alert("Delete Chat", isPresented: Binding(
+            get: { threadToDelete != nil },
+            set: { if !$0 { threadToDelete = nil } }
+        )) {
+            Button("Cancel", role: .cancel) {
+                threadToDelete = nil
+            }
+            Button("Delete", role: .destructive) {
+                if let thread = threadToDelete {
+                    let title = thread.title
+                    threads.removeAll { $0.id == thread.id }
+                    if selectedThreadID == thread.id {
+                        selectedThreadID = threads.first?.id
+                    }
+                    toastManager.show(.success("Deleted \"\(title)\"", icon: "trash"))
+                }
+                threadToDelete = nil
+            }
+        } message: {
+            Text("Are you sure you want to delete \"\(threadToDelete?.title ?? "this chat")\"? This cannot be undone.")
         }
         .onAppear {
             if !didLoadAPIKeys {
@@ -285,6 +315,9 @@ struct ContentView: View {
         }
         .onChange(of: openAIAPIKey) { _, newValue in
             persistAPIKeyToKeychain(newValue, for: .openAI)
+        }
+        .onChange(of: anthropicAPIKey) { _, newValue in
+            persistAPIKeyToKeychain(newValue, for: .anthropic)
         }
         .onChange(of: openRouterAPIKey) { _, newValue in
             persistAPIKeyToKeychain(newValue, for: .openRouter)
@@ -335,10 +368,41 @@ struct ContentView: View {
         selectedThreadID = thread.id
     }
 
+    private func exportThreadToMarkdown(_ thread: ChatThread) {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateStyle = .medium
+        dateFormatter.timeStyle = .short
+        
+        var markdown = "# \(thread.title)\n\n"
+        
+        for message in thread.messages {
+            let role = message.role == .user ? "**User**" : "**Assistant**"
+            let timestamp = dateFormatter.string(from: message.timestamp)
+            markdown += "\(role) — _\(timestamp)_\n\n"
+            markdown += "\(message.text)\n\n---\n\n"
+        }
+        
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.init(filenameExtension: "md")!]
+        panel.nameFieldStringValue = "\(thread.title).md"
+        panel.canCreateDirectories = true
+        
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                try markdown.write(to: url, atomically: true, encoding: .utf8)
+                toastManager.show(.success("Exported \"\(thread.title)\"", icon: "doc.text"))
+            } catch {
+                toastManager.show(.error("Failed to export: \(error.localizedDescription)"))
+            }
+        }
+    }
+
     private func adapter(for provider: AIProvider) -> any LLMProviderAdapter {
         switch provider {
         case .openAI:
             return OpenAIAdapter()
+        case .anthropic:
+            return AnthropicAdapter()
         case .openRouter:
             return OpenRouterAdapter()
         case .vercelAI:
@@ -352,6 +416,8 @@ struct ContentView: View {
         switch provider {
         case .openAI:
             return openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .anthropic:
+            return anthropicAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         case .openRouter:
             return openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         case .vercelAI:
@@ -515,6 +581,10 @@ struct ContentView: View {
                     try KeychainStore.saveString(trimmedLegacyKey, for: AIProvider.openAI.keychainAccount)
                     UserDefaults.standard.removeObject(forKey: AIProvider.openAI.keychainAccount)
                 }
+            }
+
+            if let keyFromKeychain = try KeychainStore.loadString(for: AIProvider.anthropic.keychainAccount) {
+                anthropicAPIKey = keyFromKeychain
             }
 
             if let keyFromKeychain = try KeychainStore.loadString(for: AIProvider.openRouter.keychainAccount) {

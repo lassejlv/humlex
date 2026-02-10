@@ -16,6 +16,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     @Binding var openAIAPIKey: String
+    @Binding var anthropicAPIKey: String
     @Binding var openRouterAPIKey: String
     @Binding var vercelAIAPIKey: String
     @Binding var geminiAPIKey: String
@@ -409,6 +410,7 @@ struct SettingsView: View {
     private func apiKeyBinding(for provider: AIProvider) -> Binding<String> {
         switch provider {
         case .openAI: return $openAIAPIKey
+        case .anthropic: return $anthropicAPIKey
         case .openRouter: return $openRouterAPIKey
         case .vercelAI: return $vercelAIAPIKey
         case .gemini: return $geminiAPIKey

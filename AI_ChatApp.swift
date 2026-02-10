@@ -22,6 +22,22 @@ struct AI_ChatApp: App {
                 .environment(\.toastManager, toastManager)
                 .environmentObject(themeManager)
                 .environmentObject(toastManager)
+                .onAppear {
+                    updateAppearance(for: themeManager.current)
+                }
+                .onReceive(themeManager.$current) { theme in
+                    updateAppearance(for: theme)
+                }
         }
+    }
+}
+
+private func updateAppearance(for theme: AppTheme) {
+    if theme.isCustom {
+        // Custom themes are all dark, so force dark appearance
+        NSApp.appearance = NSAppearance(named: .darkAqua)
+    } else {
+        // System theme: let macOS decide
+        NSApp.appearance = nil
     }
 }
