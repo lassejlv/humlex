@@ -39,10 +39,50 @@ struct OpenAICodexAdapter: LLMProviderAdapter {
             throw AdapterError.api(message: "Failed to verify Codex CLI: \(error.localizedDescription)")
         }
 
-        // Return a fixed model list — Codex manages its own model selection
-        return [
-            LLMModel(provider: .openAICodex, modelID: "codex", displayName: "OpenAI Codex"),
+        // Recommended models get reasoning effort variants (low/medium/high).
+        // Model IDs use "::" separator to encode effort: "gpt-5.3-codex::high"
+        // Alternative/older models are listed with default effort only.
+        let recommendedModels: [(id: String, name: String)] = [
+            ("gpt-5.3-codex", "GPT-5.3 Codex"),
+            ("gpt-5.2-codex", "GPT-5.2 Codex"),
+            ("gpt-5.1-codex-mini", "GPT-5.1 Codex Mini"),
         ]
+        let effortLevels: [(suffix: String, label: String)] = [
+            ("low", "Low"),
+            ("medium", "Medium"),
+            ("high", "High"),
+        ]
+
+        var models: [LLMModel] = []
+        for model in recommendedModels {
+            for effort in effortLevels {
+                models.append(LLMModel(
+                    provider: .openAICodex,
+                    modelID: "\(model.id)::\(effort.suffix)",
+                    displayName: "\(model.name) (\(effort.label))"
+                ))
+            }
+        }
+
+        // Alternative models — single entry each (uses Codex default effort)
+        let alternativeModels: [(id: String, name: String)] = [
+            ("gpt-5.1-codex-max", "GPT-5.1 Codex Max"),
+            ("gpt-5.2", "GPT-5.2"),
+            ("gpt-5.1", "GPT-5.1"),
+            ("gpt-5.1-codex", "GPT-5.1 Codex"),
+            ("gpt-5-codex", "GPT-5 Codex"),
+            ("gpt-5-codex-mini", "GPT-5 Codex Mini"),
+            ("gpt-5", "GPT-5"),
+        ]
+        for model in alternativeModels {
+            models.append(LLMModel(
+                provider: .openAICodex,
+                modelID: model.id,
+                displayName: model.name
+            ))
+        }
+
+        return models
     }
 
     func streamMessage(
@@ -64,7 +104,20 @@ struct OpenAICodexAdapter: LLMProviderAdapter {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: codexPath)
 
-        var args = ["exec", "--json", "--sandbox", "read-only"]
+        var args = ["exec", "--json", "--sandbox", "read-only", "--skip-git-repo-check"]
+
+        // Parse modelID — may contain "::effort" suffix (e.g. "gpt-5.3-codex::high")
+        let (baseModel, reasoningEffort) = Self.parseModelID(modelID)
+
+        // Pass the selected model via --model flag
+        if !baseModel.isEmpty && baseModel != "codex" {
+            args += ["--model", baseModel]
+        }
+
+        // Pass reasoning effort if specified
+        if let effort = reasoningEffort {
+            args += ["-c", "model_reasoning_effort=\"\(effort)\""]
+        }
 
         // Set working directory if available
         if let workDir = workingDirectory, !workDir.isEmpty {
@@ -101,6 +154,17 @@ struct OpenAICodexAdapter: LLMProviderAdapter {
     }
 
     // MARK: - Private Helpers
+
+    /// Parse a modelID that may contain a reasoning effort suffix.
+    /// Format: "gpt-5.3-codex::high" → ("gpt-5.3-codex", "high")
+    /// Plain:  "gpt-5.3-codex"       → ("gpt-5.3-codex", nil)
+    private static func parseModelID(_ modelID: String) -> (baseModel: String, effort: String?) {
+        let parts = modelID.components(separatedBy: "::")
+        if parts.count == 2 {
+            return (parts[0], parts[1])
+        }
+        return (modelID, nil)
+    }
 
     /// Configure the process environment with proper PATH entries.
     private func configureEnvironment(for process: Process) {
