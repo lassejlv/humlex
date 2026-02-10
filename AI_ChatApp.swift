@@ -31,6 +31,7 @@ struct AI_ChatApp: App {
                     updateAppearance(for: theme)
                 }
         }
+        .windowToolbarStyle(.unified(showsTitle: false))
     }
 }
 
