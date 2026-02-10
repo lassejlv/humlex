@@ -2,6 +2,7 @@ import SwiftUI
 
 enum SettingsTab: String, CaseIterable, Identifiable {
     case providers = "Providers"
+    case mcp = "MCP Servers"
     case theme = "Theme"
 
     var id: String { rawValue }
@@ -9,6 +10,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .providers: return "bolt.horizontal"
+        case .mcp: return "server.rack"
         case .theme: return "paintbrush"
         }
     }
@@ -29,9 +31,18 @@ struct SettingsView: View {
 
     @EnvironmentObject private var themeManager: ThemeManager
     @Environment(\.appTheme) private var theme
+    @ObservedObject private var mcpManager = MCPManager.shared
 
     @State private var selectedTab: SettingsTab = .providers
     @State private var selectedProvider: AIProvider = .openAI
+
+    // MCP add server form
+    @State private var showAddServerForm = false
+    @State private var newServerName = ""
+    @State private var newServerCommand = ""
+    @State private var newServerArgs = ""
+    @State private var newServerEnv = ""
+    @State private var serverToDelete: String? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -65,6 +76,8 @@ struct SettingsView: View {
                 switch selectedTab {
                 case .providers:
                     providerDetail
+                case .mcp:
+                    mcpDetail
                 case .theme:
                     themeDetail
                 }
@@ -97,6 +110,20 @@ struct SettingsView: View {
 
                     ForEach(AIProvider.allCases) { provider in
                         providerRow(provider)
+                    }
+                }
+
+                // MCP server sub-items (shown when MCP tab is selected)
+                if selectedTab == .mcp {
+                    let serverNames = Array(mcpManager.serverStatuses.keys).sorted()
+                    if !serverNames.isEmpty {
+                        theme.divider.frame(height: 1)
+                            .padding(.vertical, 4)
+                            .padding(.horizontal, 8)
+
+                        ForEach(serverNames, id: \.self) { name in
+                            mcpServerRow(name)
+                        }
                     }
                 }
             }
@@ -175,6 +202,29 @@ struct SettingsView: View {
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
+    }
+
+    private func mcpServerRow(_ name: String) -> some View {
+        let status = mcpManager.serverStatuses[name] ?? .disconnected
+        return HStack(spacing: 10) {
+            Image(systemName: "gearshape.2")
+                .font(.system(size: 13))
+                .foregroundStyle(theme.textSecondary)
+                .frame(width: 18)
+
+            Text(name)
+                .font(.system(size: 13))
+                .foregroundStyle(theme.textPrimary)
+                .lineLimit(1)
+
+            Spacer()
+
+            Circle()
+                .fill(mcpStatusColor(status))
+                .frame(width: 6, height: 6)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
     }
 
     // MARK: - Provider Detail
@@ -267,6 +317,411 @@ struct SettingsView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(theme.chipBackground, in: Capsule())
+        }
+    }
+
+    // MARK: - MCP Detail
+
+    private var mcpDetail: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack {
+                Text("MCP Servers")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(theme.textPrimary)
+
+                Spacer()
+
+                if mcpManager.isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+
+                mcpToolCountBadge
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showAddServerForm.toggle()
+                    }
+                } label: {
+                    Image(systemName: showAddServerForm ? "xmark" : "plus")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(theme.textSecondary)
+                        .frame(width: 24, height: 24)
+                        .background(theme.chipBackground, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .help(showAddServerForm ? "Cancel" : "Add server")
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 20)
+            .padding(.bottom, 16)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    // Add server form
+                    if showAddServerForm {
+                        mcpAddServerForm
+                    }
+
+                    // Config file path
+                    mcpConfigPathSection
+
+                    theme.divider.frame(height: 1)
+
+                    // Server list
+                    let serverNames = Array(mcpManager.serverStatuses.keys).sorted()
+                    if serverNames.isEmpty && !showAddServerForm {
+                        mcpEmptyState
+                    } else {
+                        ForEach(serverNames, id: \.self) { name in
+                            mcpServerCard(name)
+                        }
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 16)
+            }
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        .alert("Remove Server", isPresented: Binding<Bool>(
+            get: { serverToDelete != nil },
+            set: { if !$0 { serverToDelete = nil } }
+        )) {
+            Button("Cancel", role: .cancel) {
+                serverToDelete = nil
+            }
+            Button("Remove", role: .destructive) {
+                if let name = serverToDelete {
+                    Task {
+                        await mcpManager.removeServer(name: name)
+                    }
+                }
+                serverToDelete = nil
+            }
+        } message: {
+            Text("Are you sure you want to remove \"\(serverToDelete ?? "")\"? This will update your mcp.json config file.")
+        }
+    }
+
+    private var mcpToolCountBadge: some View {
+        let count = mcpManager.tools.count
+        return HStack(spacing: 4) {
+            Image(systemName: count > 0 ? "wrench.and.screwdriver.fill" : "wrench.and.screwdriver")
+                .font(.system(size: 11))
+            Text("\(count) tool\(count == 1 ? "" : "s")")
+                .font(.system(size: 11, weight: .medium))
+        }
+        .foregroundColor(count > 0 ? .green : theme.textSecondary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            (count > 0 ? Color.green.opacity(0.12) : theme.chipBackground),
+            in: Capsule()
+        )
+    }
+
+    private var mcpAddServerForm: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Add MCP Server")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(theme.textPrimary)
+
+            mcpFormField(label: "Name", placeholder: "e.g. filesystem", text: $newServerName)
+            mcpFormField(label: "Command", placeholder: "e.g. npx", text: $newServerCommand)
+            mcpFormField(label: "Arguments", placeholder: "e.g. -y @modelcontextprotocol/server-filesystem /path", text: $newServerArgs)
+            mcpFormField(label: "Environment", placeholder: "e.g. API_KEY=abc123 OTHER=value", text: $newServerEnv)
+
+            HStack {
+                Spacer()
+
+                Button("Cancel") {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        resetAddServerForm()
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(theme.textSecondary)
+                .font(.system(size: 12, weight: .medium))
+
+                Button {
+                    Task {
+                        await addServer()
+                    }
+                } label: {
+                    Text("Add Server")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                        .background(theme.accent, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(newServerName.trimmingCharacters(in: .whitespaces).isEmpty ||
+                          newServerCommand.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(14)
+        .background(theme.surfaceBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(theme.accent.opacity(0.3), lineWidth: 1)
+        )
+    }
+
+    private func mcpFormField(label: String, placeholder: String, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(theme.textSecondary)
+
+            TextField(placeholder, text: text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13, design: .monospaced))
+                .foregroundStyle(theme.textPrimary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(theme.codeBackground, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(theme.codeBorder, lineWidth: 1)
+                )
+        }
+    }
+
+    private func addServer() async {
+        let name = newServerName.trimmingCharacters(in: .whitespaces)
+        let command = newServerCommand.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty, !command.isEmpty else { return }
+
+        // Parse args: split by spaces, respecting simple quoting
+        let args = parseArgs(newServerArgs)
+
+        // Parse env: "KEY=value KEY2=value2"
+        let env = parseEnv(newServerEnv)
+
+        await mcpManager.addServer(name: name, command: command, args: args, env: env.isEmpty ? nil : env)
+
+        withAnimation(.easeInOut(duration: 0.2)) {
+            resetAddServerForm()
+        }
+    }
+
+    private func resetAddServerForm() {
+        showAddServerForm = false
+        newServerName = ""
+        newServerCommand = ""
+        newServerArgs = ""
+        newServerEnv = ""
+    }
+
+    private func parseArgs(_ input: String) -> [String] {
+        let trimmed = input.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return [] }
+        // Simple split — handles space-separated args
+        // For quoted strings, do a basic parse
+        var args: [String] = []
+        var current = ""
+        var inQuote: Character? = nil
+        for ch in trimmed {
+            if let q = inQuote {
+                if ch == q {
+                    inQuote = nil
+                } else {
+                    current.append(ch)
+                }
+            } else if ch == "\"" || ch == "'" {
+                inQuote = ch
+            } else if ch == " " {
+                if !current.isEmpty {
+                    args.append(current)
+                    current = ""
+                }
+            } else {
+                current.append(ch)
+            }
+        }
+        if !current.isEmpty { args.append(current) }
+        return args
+    }
+
+    private func parseEnv(_ input: String) -> [String: String] {
+        let trimmed = input.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return [:] }
+        var env: [String: String] = [:]
+        // Split by spaces, then by first '='
+        for pair in trimmed.components(separatedBy: " ") {
+            let parts = pair.split(separator: "=", maxSplits: 1)
+            if parts.count == 2 {
+                env[String(parts[0])] = String(parts[1])
+            }
+        }
+        return env
+    }
+
+    private var mcpConfigPathSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Config File")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(theme.textSecondary)
+
+            HStack(spacing: 8) {
+                let configPath = "~/Library/Application Support/Humlex/mcp.json"
+                Text(configPath)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(theme.textPrimary)
+                    .textSelection(.enabled)
+
+                Spacer()
+
+                Button {
+                    // Open the config directory in Finder
+                    let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+                    let appDir = appSupport.appendingPathComponent("Humlex")
+                    // Create directory if it doesn't exist
+                    try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
+                    NSWorkspace.shared.open(appDir)
+                } label: {
+                    Image(systemName: "folder")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .help("Open config directory in Finder")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(theme.codeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(theme.codeBorder, lineWidth: 1)
+            )
+        }
+    }
+
+    private var mcpEmptyState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "server.rack")
+                .font(.system(size: 24))
+                .foregroundStyle(theme.textTertiary)
+
+            Text("No MCP servers configured")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(theme.textSecondary)
+
+            Text("Add servers to mcp.json to get started")
+                .font(.system(size: 12))
+                .foregroundStyle(theme.textTertiary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 24)
+    }
+
+    private func mcpServerCard(_ name: String) -> some View {
+        let status = mcpManager.serverStatuses[name] ?? .disconnected
+        let serverTools = mcpManager.tools.filter { $0.serverName == name }
+
+        return VStack(alignment: .leading, spacing: 10) {
+            // Server name and status
+            HStack {
+                Circle()
+                    .fill(mcpStatusColor(status))
+                    .frame(width: 8, height: 8)
+
+                Text(name)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(theme.textPrimary)
+
+                Spacer()
+
+                Text(status.label)
+                    .font(.system(size: 11))
+                    .foregroundStyle(mcpStatusTextColor(status))
+
+                // Reconnect button
+                Button {
+                    Task {
+                        await mcpManager.reconnect(serverName: name)
+                    }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .help("Reconnect server")
+
+                // Delete button
+                Button {
+                    serverToDelete = name
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .help("Remove server")
+            }
+
+            // Tools list
+            if !serverTools.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Tools (\(serverTools.count))")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(theme.textSecondary)
+
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 6)], alignment: .leading, spacing: 6) {
+                        ForEach(serverTools) { tool in
+                            mcpToolChip(tool)
+                        }
+                    }
+                }
+            } else if status == .connected {
+                Text("No tools discovered")
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.textTertiary)
+            }
+        }
+        .padding(12)
+        .background(theme.hoverBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(theme.chipBorder, lineWidth: 1)
+        )
+    }
+
+    private func mcpToolChip(_ tool: MCPTool) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "wrench.fill")
+                .font(.system(size: 9))
+            Text(tool.name)
+                .font(.system(size: 11, design: .monospaced))
+        }
+        .foregroundStyle(theme.textSecondary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(theme.chipBackground, in: Capsule())
+        .overlay(Capsule().stroke(theme.chipBorder, lineWidth: 0.5))
+        .help(tool.description)
+    }
+
+    private func mcpStatusColor(_ status: MCPManager.ServerStatus) -> Color {
+        switch status {
+        case .connected: return .green
+        case .connecting: return .orange
+        case .error: return .red
+        case .disconnected: return .gray
+        }
+    }
+
+    private func mcpStatusTextColor(_ status: MCPManager.ServerStatus) -> Color {
+        switch status {
+        case .connected: return .green
+        case .connecting: return .orange
+        case .error: return .red
+        case .disconnected: return theme.textTertiary
         }
     }
 
@@ -399,6 +854,24 @@ struct SettingsView: View {
                     }
                 }
                 .disabled(isLoadingModels)
+            }
+
+            if selectedTab == .mcp {
+                Button {
+                    Task {
+                        await mcpManager.loadAndConnect()
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        if mcpManager.isLoading {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Text("Reload All")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                }
+                .disabled(mcpManager.isLoading)
             }
         }
         .padding(.horizontal, 20)

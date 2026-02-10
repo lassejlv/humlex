@@ -50,6 +50,7 @@ struct ContentView: View {
     @State private var streamingTask: Task<Void, Never>?
     @State private var threadToDelete: ChatThread?
     @State private var isCommandPaletteOpen: Bool = false
+    @StateObject private var mcpManager = MCPManager.shared
     @EnvironmentObject private var themeManager: ThemeManager
     @Environment(\.appTheme) private var theme
     @Environment(\.toastManager) private var toastManager
@@ -310,6 +311,9 @@ struct ContentView: View {
             if models.isEmpty {
                 Task { await fetchModels() }
             }
+
+            // Connect to MCP servers
+            Task { await mcpManager.loadAndConnect() }
         }
         .onDisappear {
             stopStreaming()
@@ -543,7 +547,12 @@ struct ContentView: View {
         var markdown = "# \(thread.title)\n\n"
         
         for message in thread.messages {
-            let role = message.role == .user ? "**User**" : "**Assistant**"
+            let role: String
+            switch message.role {
+            case .user: role = "**User**"
+            case .assistant: role = "**Assistant**"
+            case .tool: role = "**Tool** (\(message.toolName ?? "unknown"))"
+            }
             let timestamp = dateFormatter.string(from: message.timestamp)
             markdown += "\(role) — _\(timestamp)_\n\n"
             markdown += "\(message.text)\n\n---\n\n"
@@ -671,64 +680,18 @@ struct ContentView: View {
         isSending = true
         statusMessage = nil
 
-        let history = threads[idx].messages.map { message in
-            LLMChatMessage(
-                role: message.role == .user ? .user : .assistant,
-                content: message.text,
-                attachments: message.attachments
-            )
-        }
-        let assistantID = UUID()
-        threads[idx].messages.append(
-            ChatMessage(id: assistantID, role: .assistant, text: "", timestamp: .now)
-        )
-        streamingMessageID = assistantID
         defer {
             isSending = false
             streamingMessageID = nil
             persistChats(threads)
         }
 
-        do {
-            try await adapter(for: selectedModel.provider).streamMessage(
-                history: history,
-                modelID: selectedModel.modelID,
-                apiKey: key
-            ) { delta in
-                await MainActor.run {
-                    appendStreamDelta(delta, to: assistantID, in: threadID)
-                }
-            }
-
-            if messageText(for: assistantID, in: threadID).trimmingCharacters(
-                in: .whitespacesAndNewlines
-            ).isEmpty {
-                setMessageText("No response from model.", for: assistantID, in: threadID)
-                statusMessage = "The model returned an empty response."
-            }
-        } catch {
-            if error is CancellationError {
-                statusMessage = "Response stopped."
-                if messageText(for: assistantID, in: threadID).trimmingCharacters(
-                    in: .whitespacesAndNewlines
-                ).isEmpty {
-                    setMessageText("Stopped.", for: assistantID, in: threadID)
-                }
-                return
-            }
-
-            let text = "Request failed: \(error.localizedDescription)"
-            if messageText(for: assistantID, in: threadID).trimmingCharacters(
-                in: .whitespacesAndNewlines
-            ).isEmpty {
-                setMessageText(text, for: assistantID, in: threadID)
-            } else {
-                setMessageText(
-                    "\(messageText(for: assistantID, in: threadID))\n\n\(text)", for: assistantID,
-                    in: threadID)
-            }
-            statusMessage = text
-        }
+        await performStreamingLoop(
+            threadID: threadID,
+            threadIndex: idx,
+            model: selectedModel,
+            apiKey: key
+        )
     }
 
     private func stopStreaming() {
@@ -738,35 +701,23 @@ struct ContentView: View {
 
     private func loadAPIKeysFromKeychain() {
         do {
-            if let keyFromKeychain = try KeychainStore.loadString(for: AIProvider.openAI.keychainAccount) {
-                openAIAPIKey = keyFromKeychain
-            } else {
-                let legacyKey = UserDefaults.standard.string(forKey: AIProvider.openAI.keychainAccount) ?? ""
-                let trimmedLegacyKey = legacyKey.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmedLegacyKey.isEmpty {
-                    openAIAPIKey = trimmedLegacyKey
-                    try KeychainStore.saveString(trimmedLegacyKey, for: AIProvider.openAI.keychainAccount)
-                    UserDefaults.standard.removeObject(forKey: AIProvider.openAI.keychainAccount)
-                }
+            if let key = try KeychainStore.loadString(for: AIProvider.openAI.keychainAccount) {
+                openAIAPIKey = key
             }
-
-            if let keyFromKeychain = try KeychainStore.loadString(for: AIProvider.anthropic.keychainAccount) {
-                anthropicAPIKey = keyFromKeychain
+            if let key = try KeychainStore.loadString(for: AIProvider.anthropic.keychainAccount) {
+                anthropicAPIKey = key
             }
-
-            if let keyFromKeychain = try KeychainStore.loadString(for: AIProvider.openRouter.keychainAccount) {
-                openRouterAPIKey = keyFromKeychain
+            if let key = try KeychainStore.loadString(for: AIProvider.openRouter.keychainAccount) {
+                openRouterAPIKey = key
             }
-
-            if let keyFromKeychain = try KeychainStore.loadString(for: AIProvider.vercelAI.keychainAccount) {
-                vercelAIAPIKey = keyFromKeychain
+            if let key = try KeychainStore.loadString(for: AIProvider.vercelAI.keychainAccount) {
+                vercelAIAPIKey = key
             }
-
-            if let keyFromKeychain = try KeychainStore.loadString(for: AIProvider.gemini.keychainAccount) {
-                geminiAPIKey = keyFromKeychain
+            if let key = try KeychainStore.loadString(for: AIProvider.gemini.keychainAccount) {
+                geminiAPIKey = key
             }
         } catch {
-            statusMessage = "Failed loading API key from Keychain: \(error.localizedDescription)"
+            statusMessage = "Failed loading API keys: \(error.localizedDescription)"
         }
     }
 
@@ -866,64 +817,207 @@ struct ContentView: View {
             threads[idx].title = String(text.prefix(40))
         }
 
-        let history = threads[idx].messages.map { message in
-            LLMChatMessage(
-                role: message.role == .user ? .user : .assistant,
-                content: message.text,
-                attachments: message.attachments
-            )
-        }
-        let assistantID = UUID()
-        threads[idx].messages.append(
-            ChatMessage(id: assistantID, role: .assistant, text: "", timestamp: .now)
-        )
-        streamingMessageID = assistantID
         defer {
             isSending = false
             streamingMessageID = nil
             persistChats(threads)
         }
 
-        do {
-            try await adapter(for: selectedModel.provider).streamMessage(
-                history: history,
-                modelID: selectedModel.modelID,
-                apiKey: key
-            ) { delta in
-                await MainActor.run {
-                    appendStreamDelta(delta, to: assistantID, in: threadID)
+        await performStreamingLoop(
+            threadID: threadID,
+            threadIndex: idx,
+            model: selectedModel,
+            apiKey: key
+        )
+    }
+
+    // MARK: - Tool-Use Streaming Loop
+
+    /// Performs the streaming loop: sends to LLM, handles tool calls, re-sends with results.
+    /// Loops until the LLM produces a response with no tool calls (max 10 iterations).
+    @MainActor
+    private func performStreamingLoop(
+        threadID: UUID,
+        threadIndex: Int,
+        model: LLMModel,
+        apiKey: String
+    ) async {
+        let maxToolIterations = 5
+        var previousToolCallSignature: String? = nil
+
+        for _ in 0..<maxToolIterations {
+            // Build history from current thread messages
+            guard let idx = threads.firstIndex(where: { $0.id == threadID }) else { return }
+
+            let history = threads[idx].messages.map { message -> LLMChatMessage in
+                let role: ChatRole = {
+                    switch message.role {
+                    case .user: return .user
+                    case .assistant: return .assistant
+                    case .tool: return .tool
+                    }
+                }()
+
+                let toolCalls = (message.toolCalls ?? []).map {
+                    ToolCallInfo(id: $0.id, name: $0.name, arguments: $0.arguments, serverName: $0.serverName)
                 }
+
+                let toolResult: ToolResultInfo? = {
+                    if message.role == .tool, let tcID = message.toolCallID, let name = message.toolName {
+                        return ToolResultInfo(toolCallID: tcID, toolName: name, content: message.text, isError: false)
+                    }
+                    return nil
+                }()
+
+                return LLMChatMessage(
+                    role: role,
+                    content: message.text,
+                    attachments: message.attachments,
+                    toolCalls: toolCalls,
+                    toolResult: toolResult
+                )
             }
 
-            if messageText(for: assistantID, in: threadID).trimmingCharacters(
-                in: .whitespacesAndNewlines
-            ).isEmpty {
-                setMessageText("No response from model.", for: assistantID, in: threadID)
-                statusMessage = "The model returned an empty response."
-            }
-        } catch {
-            if error is CancellationError {
-                statusMessage = "Response stopped."
+            // Create assistant placeholder
+            let assistantID = UUID()
+            threads[idx].messages.append(
+                ChatMessage(id: assistantID, role: .assistant, text: "", timestamp: .now)
+            )
+            streamingMessageID = assistantID
+
+            do {
+                let result = try await adapter(for: model.provider).streamMessage(
+                    history: history,
+                    modelID: model.modelID,
+                    apiKey: apiKey,
+                    tools: mcpManager.tools
+                ) { event in
+                    await MainActor.run {
+                        switch event {
+                        case .textDelta(let delta):
+                            appendStreamDelta(delta, to: assistantID, in: threadID)
+                        case .toolCallStart(_, _, _):
+                            // Append visual indicator that a tool is being called
+                            if messageText(for: assistantID, in: threadID).isEmpty {
+                                // Will be replaced once we have the full tool call info
+                            }
+                            break
+                        case .toolCallArgumentDelta(_, _):
+                            break
+                        case .done:
+                            break
+                        }
+                    }
+                }
+
+                // Check if there are tool calls to execute
+                if !result.toolCalls.isEmpty {
+                    // Detect repeated identical tool calls to prevent infinite loops
+                    let currentSignature = result.toolCalls.map { "\($0.name):\($0.arguments)" }.joined(separator: "|")
+                    if currentSignature == previousToolCallSignature {
+                        // Model is repeating the same tool call — break out
+                        if messageText(for: assistantID, in: threadID).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            setMessageText("The model repeated the same tool call. Stopping to prevent a loop.", for: assistantID, in: threadID)
+                        }
+                        return
+                    }
+                    previousToolCallSignature = currentSignature
+
+                    // Update the assistant message with tool call info
+                    guard let threadIdx = threads.firstIndex(where: { $0.id == threadID }),
+                          let msgIdx = threads[threadIdx].messages.firstIndex(where: { $0.id == assistantID }) else {
+                        return
+                    }
+
+                    // Map tool call server names from MCPTool registry
+                    let resolvedToolCalls = result.toolCalls.map { tc -> ChatMessage.ToolCall in
+                        let serverName = mcpManager.tools.first(where: { $0.name == tc.name })?.serverName ?? ""
+                        return ChatMessage.ToolCall(id: tc.id, name: tc.name, arguments: tc.arguments, serverName: serverName)
+                    }
+                    threads[threadIdx].messages[msgIdx].toolCalls = resolvedToolCalls
+
+                    // Execute each tool call and add results to the thread
+                    for tc in resolvedToolCalls {
+                        let toolResultText: String
+
+                        do {
+                            // Parse arguments
+                            let args: [String: Any]
+                            if let data = tc.arguments.data(using: .utf8),
+                               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                                args = dict
+                            } else {
+                                args = [:]
+                            }
+
+                            let mcpResult = try await mcpManager.callTool(
+                                serverName: tc.serverName,
+                                toolName: tc.name,
+                                arguments: args
+                            )
+
+                            // Concatenate text content from the result
+                            toolResultText = mcpResult.content
+                                .compactMap { $0.text }
+                                .joined(separator: "\n")
+                        } catch {
+                            toolResultText = "Error executing tool: \(error.localizedDescription)"
+                        }
+
+                        // Add tool result message to thread
+                        guard let tIdx = threads.firstIndex(where: { $0.id == threadID }) else { return }
+                        let toolMessage = ChatMessage(
+                            id: UUID(),
+                            role: .tool,
+                            text: toolResultText,
+                            timestamp: .now,
+                            toolCallID: tc.id,
+                            toolName: tc.name
+                        )
+                        threads[tIdx].messages.append(toolMessage)
+                    }
+
+                    // Continue the loop — LLM will process tool results
+                    continue
+                }
+
+                // No tool calls — we're done
                 if messageText(for: assistantID, in: threadID).trimmingCharacters(
                     in: .whitespacesAndNewlines
                 ).isEmpty {
-                    setMessageText("Stopped.", for: assistantID, in: threadID)
+                    setMessageText("No response from model.", for: assistantID, in: threadID)
+                    statusMessage = "The model returned an empty response."
                 }
                 return
-            }
 
-            let text = "Request failed: \(error.localizedDescription)"
-            if messageText(for: assistantID, in: threadID).trimmingCharacters(
-                in: .whitespacesAndNewlines
-            ).isEmpty {
-                setMessageText(text, for: assistantID, in: threadID)
-            } else {
-                setMessageText(
-                    "\(messageText(for: assistantID, in: threadID))\n\n\(text)", for: assistantID,
-                    in: threadID)
+            } catch {
+                if error is CancellationError {
+                    statusMessage = "Response stopped."
+                    if messageText(for: assistantID, in: threadID).trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                    ).isEmpty {
+                        setMessageText("Stopped.", for: assistantID, in: threadID)
+                    }
+                    return
+                }
+
+                let text = "Request failed: \(error.localizedDescription)"
+                if messageText(for: assistantID, in: threadID).trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                ).isEmpty {
+                    setMessageText(text, for: assistantID, in: threadID)
+                } else {
+                    setMessageText(
+                        "\(messageText(for: assistantID, in: threadID))\n\n\(text)", for: assistantID,
+                        in: threadID)
+                }
+                statusMessage = text
+                return
             }
-            statusMessage = text
         }
+
+        // If we hit max iterations, add a note
+        statusMessage = "Tool use loop reached maximum iterations."
     }
 
     private func appendStreamDelta(_ delta: String, to messageID: UUID, in threadID: UUID) {

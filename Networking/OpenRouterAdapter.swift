@@ -23,8 +23,9 @@ struct OpenRouterAdapter: LLMProviderAdapter {
         history: [LLMChatMessage],
         modelID: String,
         apiKey: String,
-        onDelta: @escaping @Sendable (String) async -> Void
-    ) async throws {
+        tools: [MCPTool],
+        onEvent: @escaping @Sendable (StreamEvent) async -> Void
+    ) async throws -> StreamResult {
         var request = URLRequest(url: URL(string: "https://openrouter.ai/api/v1/chat/completions")!)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -32,15 +33,31 @@ struct OpenRouterAdapter: LLMProviderAdapter {
         request.setValue("https://localhost", forHTTPHeaderField: "HTTP-Referer")
         request.setValue("Humlex", forHTTPHeaderField: "X-Title")
 
+        let toolDefs = openRouterToolDefs(from: tools)
         let body = OpenAIChatStreamRequest(
             model: modelID,
             stream: true,
-            messages: history.map { apiMessage(from: $0) }
+            messages: history.map { apiMessage(from: $0) },
+            tools: toolDefs
         )
         request.httpBody = try JSONEncoder().encode(body)
 
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
-        try await streamSSE(bytes: bytes, response: response, onDelta: onDelta)
+        return try await streamSSE(bytes: bytes, response: response, onEvent: onEvent)
+    }
+}
+
+private func openRouterToolDefs(from mcpTools: [MCPTool]) -> [[String: AnyCodable]]? {
+    guard !mcpTools.isEmpty else { return nil }
+    return mcpTools.map { tool in
+        [
+            "type": AnyCodable("function"),
+            "function": AnyCodable([
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.inputSchema.mapValues { $0.value }
+            ] as [String: Any])
+        ]
     }
 }
 

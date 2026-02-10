@@ -10,6 +10,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
     enum Role: String, Hashable, Codable {
         case user
         case assistant
+        case tool
     }
 
     let id: UUID
@@ -18,12 +19,29 @@ struct ChatMessage: Identifiable, Hashable, Codable {
     let timestamp: Date
     var attachments: [Attachment]
 
-    init(id: UUID, role: Role, text: String, timestamp: Date, attachments: [Attachment] = []) {
+    // Tool-related fields (optional, for MCP integration)
+    var toolCalls: [ToolCall]?      // When assistant requests tool calls
+    var toolCallID: String?          // When role == .tool, the ID of the tool call this responds to
+    var toolName: String?            // When role == .tool, the name of the tool
+
+    init(id: UUID, role: Role, text: String, timestamp: Date, attachments: [Attachment] = [],
+         toolCalls: [ToolCall]? = nil, toolCallID: String? = nil, toolName: String? = nil) {
         self.id = id
         self.role = role
         self.text = text
         self.timestamp = timestamp
         self.attachments = attachments
+        self.toolCalls = toolCalls
+        self.toolCallID = toolCallID
+        self.toolName = toolName
+    }
+
+    /// A tool call requested by the assistant.
+    struct ToolCall: Hashable, Codable {
+        let id: String
+        let name: String
+        let arguments: String
+        let serverName: String
     }
 }
 

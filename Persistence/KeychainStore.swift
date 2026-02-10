@@ -1,70 +1,59 @@
 import Foundation
-import Security
 
+/// Stores API keys in a JSON file under Application Support/Humlex.
+/// Replaces the macOS Keychain approach to avoid password prompts with unsigned builds.
 enum KeychainStore {
-    private static let service = "com.local.aichat"
+    private static let fileName = "secrets.json"
+
+    private static var fileURL: URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appDir = appSupport.appendingPathComponent("Humlex")
+        return appDir.appendingPathComponent(fileName)
+    }
 
     static func loadString(for key: String) throws -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-
-        switch status {
-        case errSecSuccess:
-            guard let data = item as? Data else { return nil }
-            return String(data: data, encoding: .utf8)
-        case errSecItemNotFound:
-            return nil
-        default:
-            throw KeychainError.unhandledStatus(status)
-        }
+        let store = try loadStore()
+        return store[key]
     }
 
     static func saveString(_ value: String, for key: String) throws {
-        let data = Data(value.utf8)
-        let baseQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-        ]
-
-        let attributes: [String: Any] = [
-            kSecValueData as String: data
-        ]
-
-        let updateStatus = SecItemUpdate(baseQuery as CFDictionary, attributes as CFDictionary)
-        if updateStatus == errSecSuccess {
-            return
-        }
-        if updateStatus != errSecItemNotFound {
-            throw KeychainError.unhandledStatus(updateStatus)
-        }
-
-        var createQuery = baseQuery
-        createQuery[kSecValueData as String] = data
-        let addStatus = SecItemAdd(createQuery as CFDictionary, nil)
-        if addStatus != errSecSuccess {
-            throw KeychainError.unhandledStatus(addStatus)
-        }
+        var store = (try? loadStore()) ?? [:]
+        store[key] = value
+        try saveStore(store)
     }
 
     static func deleteValue(for key: String) throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-        ]
-        let status = SecItemDelete(query as CFDictionary)
-        if status != errSecSuccess && status != errSecItemNotFound {
-            throw KeychainError.unhandledStatus(status)
+        var store = (try? loadStore()) ?? [:]
+        store.removeValue(forKey: key)
+        try saveStore(store)
+    }
+
+    // MARK: - Private
+
+    private static func loadStore() throws -> [String: String] {
+        let url = fileURL
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return [:]
         }
+        let data = try Data(contentsOf: url)
+        return try JSONDecoder().decode([String: String].self, from: data)
+    }
+
+    private static func saveStore(_ store: [String: String]) throws {
+        let url = fileURL
+        let dir = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(store)
+        try data.write(to: url, options: [.atomic])
+
+        // Set file permissions to owner-only read/write (600)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: url.path
+        )
     }
 }
 

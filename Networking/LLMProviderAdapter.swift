@@ -20,11 +20,13 @@ func validateHTTPResponse(_ response: URLResponse, data: Data) throws {
     }
 }
 
+/// Stream SSE with tool call support (OpenAI-compatible format).
+/// Returns a StreamResult with accumulated text and any tool calls.
 func streamSSE(
     bytes: URLSession.AsyncBytes,
     response: URLResponse,
-    onDelta: @escaping @Sendable (String) async -> Void
-) async throws {
+    onEvent: @escaping @Sendable (StreamEvent) async -> Void
+) async throws -> StreamResult {
     guard let http = response as? HTTPURLResponse else {
         throw AdapterError.invalidResponse
     }
@@ -39,6 +41,9 @@ func streamSSE(
 
     var emittedAny = false
     let decoder = JSONDecoder()
+    var fullText = ""
+    // Track tool calls being assembled from stream deltas
+    var toolCallAccumulators: [Int: (id: String, name: String, arguments: String)] = [:]
 
     for try await line in bytes.lines {
         try Task.checkCancellation()
@@ -50,9 +55,30 @@ func streamSSE(
         guard let data = payload.data(using: .utf8) else { continue }
 
         if let chunk = try? decoder.decode(OpenAIChatStreamChunk.self, from: data) {
-            if let delta = chunk.choices.first?.delta.contentText, !delta.isEmpty {
-                emittedAny = true
-                await onDelta(delta)
+            if let choice = chunk.choices.first {
+                // Handle text content
+                if let text = choice.delta.contentText, !text.isEmpty {
+                    emittedAny = true
+                    fullText += text
+                    await onEvent(.textDelta(text))
+                }
+
+                // Handle tool calls
+                if let toolCalls = choice.delta.toolCalls {
+                    for tc in toolCalls {
+                        let idx = tc.index
+                        if let id = tc.id, let name = tc.function?.name {
+                            // New tool call starting
+                            toolCallAccumulators[idx] = (id: id, name: name, arguments: "")
+                            await onEvent(.toolCallStart(index: idx, id: id, name: name))
+                        }
+                        if let argDelta = tc.function?.arguments, !argDelta.isEmpty {
+                            toolCallAccumulators[idx]?.arguments += argDelta
+                            await onEvent(.toolCallArgumentDelta(index: idx, delta: argDelta))
+                        }
+                    }
+                    emittedAny = true
+                }
             }
             continue
         }
@@ -65,6 +91,14 @@ func streamSSE(
     if !emittedAny {
         throw AdapterError.missingResponseText
     }
+
+    // Build tool calls from accumulators
+    let toolCalls = toolCallAccumulators.sorted(by: { $0.key < $1.key }).map { (_, acc) in
+        ToolCallInfo(id: acc.id, name: acc.name, arguments: acc.arguments, serverName: "")
+    }
+
+    await onEvent(.done)
+    return StreamResult(text: fullText, toolCalls: toolCalls)
 }
 
 func collectData(from bytes: URLSession.AsyncBytes) async throws -> Data {
@@ -81,9 +115,39 @@ func apiMessage(from msg: LLMChatMessage) -> OpenAIChatStreamRequest.Message {
     typealias M = OpenAIChatStreamRequest.Message
     typealias P = M.ContentPart
 
-    // No attachments → plain text (cheaper, wider model support)
+    // Tool result messages
+    if msg.role == .tool, let toolResult = msg.toolResult {
+        return M(
+            role: "tool",
+            content: .text(toolResult.content),
+            toolCallID: toolResult.toolCallID,
+            toolCalls: nil
+        )
+    }
+
+    // Assistant messages with tool calls
+    if msg.role == .assistant && !msg.toolCalls.isEmpty {
+        let tcObjects = msg.toolCalls.map { tc in
+            M.ToolCallObject(
+                id: tc.id,
+                type: "function",
+                function: M.ToolCallObject.FunctionObject(
+                    name: tc.name,
+                    arguments: tc.arguments
+                )
+            )
+        }
+        return M(
+            role: "assistant",
+            content: msg.content.isEmpty ? nil : .text(msg.content),
+            toolCallID: nil,
+            toolCalls: tcObjects
+        )
+    }
+
+    // No attachments -> plain text (cheaper, wider model support)
     guard !msg.attachments.isEmpty else {
-        return M(role: msg.role.rawValue, content: .text(msg.content))
+        return M(role: msg.role.rawValue, content: .text(msg.content), toolCallID: nil, toolCalls: nil)
     }
 
     var parts: [P] = []
@@ -109,7 +173,22 @@ func apiMessage(from msg: LLMChatMessage) -> OpenAIChatStreamRequest.Message {
         parts.append(.text(msg.content))
     }
 
-    return M(role: msg.role.rawValue, content: .parts(parts))
+    return M(role: msg.role.rawValue, content: .parts(parts), toolCallID: nil, toolCalls: nil)
+}
+
+/// Convert MCP tools to OpenAI tool format for the request body.
+func openAIToolDefinitions(from mcpTools: [MCPTool]) -> [[String: Any]]? {
+    guard !mcpTools.isEmpty else { return nil }
+    return mcpTools.map { tool in
+        [
+            "type": "function",
+            "function": [
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.inputSchema.mapValues { $0.value }
+            ] as [String: Any]
+        ] as [String: Any]
+    }
 }
 
 // MARK: - OpenAI Shared Codable Types
@@ -117,7 +196,23 @@ func apiMessage(from msg: LLMChatMessage) -> OpenAIChatStreamRequest.Message {
 struct OpenAIChatStreamRequest: Encodable {
     struct Message: Encodable {
         let role: String
-        let content: MessageContent
+        let content: MessageContent?
+        let toolCallID: String?
+        let toolCalls: [ToolCallObject]?
+
+        enum CodingKeys: String, CodingKey {
+            case role, content
+            case toolCallID = "tool_call_id"
+            case toolCalls = "tool_calls"
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(role, forKey: .role)
+            try container.encodeIfPresent(content, forKey: .content)
+            try container.encodeIfPresent(toolCallID, forKey: .toolCallID)
+            try container.encodeIfPresent(toolCalls, forKey: .toolCalls)
+        }
 
         enum MessageContent: Encodable {
             case text(String)
@@ -158,11 +253,30 @@ struct OpenAIChatStreamRequest: Encodable {
                 let url: String
             }
         }
+
+        struct ToolCallObject: Encodable {
+            let id: String
+            let type: String
+            let function: FunctionObject
+
+            struct FunctionObject: Encodable {
+                let name: String
+                let arguments: String
+            }
+        }
     }
 
     let model: String
     let stream: Bool
     let messages: [Message]
+    let tools: [[String: AnyCodable]]?
+
+    init(model: String, stream: Bool, messages: [Message], tools: [[String: AnyCodable]]? = nil) {
+        self.model = model
+        self.stream = stream
+        self.messages = messages
+        self.tools = tools
+    }
 }
 
 struct OpenAIChatStreamChunk: Decodable {
@@ -172,11 +286,25 @@ struct OpenAIChatStreamChunk: Decodable {
                 let text: String?
             }
 
+            struct ToolCall: Decodable {
+                let index: Int
+                let id: String?
+                let type: String?
+                let function: Function?
+
+                struct Function: Decodable {
+                    let name: String?
+                    let arguments: String?
+                }
+            }
+
             let content: String?
             let contentParts: [ContentPart]?
+            let toolCalls: [ToolCall]?
 
             enum CodingKeys: String, CodingKey {
                 case content
+                case toolCalls = "tool_calls"
             }
 
             init(from decoder: Decoder) throws {
@@ -195,6 +323,8 @@ struct OpenAIChatStreamChunk: Decodable {
                     content = nil
                     contentParts = nil
                 }
+
+                toolCalls = try container.decodeIfPresent([ToolCall].self, forKey: .toolCalls)
             }
 
             var contentText: String? {

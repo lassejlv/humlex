@@ -38,8 +38,9 @@ struct GeminiAdapter: LLMProviderAdapter {
         history: [LLMChatMessage],
         modelID: String,
         apiKey: String,
-        onDelta: @escaping @Sendable (String) async -> Void
-    ) async throws {
+        tools: [MCPTool],
+        onEvent: @escaping @Sendable (StreamEvent) async -> Void
+    ) async throws -> StreamResult {
         let url = URL(
             string: "\(baseURL)/models/\(modelID):streamGenerateContent?alt=sse&key=\(apiKey)"
         )!
@@ -47,17 +48,123 @@ struct GeminiAdapter: LLMProviderAdapter {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
+        let geminiTools = geminiToolDefs(from: tools)
         let body = GeminiStreamRequest(
-            contents: history.map { geminiContent(from: $0) }
+            contents: buildGeminiContents(from: history),
+            tools: geminiTools
         )
         request.httpBody = try JSONEncoder().encode(body)
 
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
-        try await streamGeminiSSE(bytes: bytes, response: response, onDelta: onDelta)
+        return try await streamGeminiSSE(bytes: bytes, response: response, onEvent: onEvent)
     }
 }
 
+/// Build Gemini contents from LLMChatMessage history.
+/// Gemini requires:
+///   - "user" messages with text parts
+///   - "model" messages with text and/or functionCall parts
+///   - "user" messages with functionResponse parts for tool results
+/// Tool result messages (.tool role) must be grouped and sent as functionResponse
+/// parts in a single "user" content entry.
+private func buildGeminiContents(from history: [LLMChatMessage]) -> [GeminiStreamRequest.Content] {
+    typealias Part = GeminiStreamRequest.Content.Part
+    typealias Content = GeminiStreamRequest.Content
+
+    var contents: [Content] = []
+    var pendingToolResponses: [Part] = []
+
+    for msg in history {
+        switch msg.role {
+        case .system:
+            // Gemini doesn't have a system role — prepend as user message
+            if !msg.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if !pendingToolResponses.isEmpty {
+                    contents.append(Content(role: "user", parts: pendingToolResponses))
+                    pendingToolResponses = []
+                }
+                contents.append(Content(role: "user", parts: [
+                    Part(text: msg.content, inlineData: nil, functionCall: nil, functionResponse: nil)
+                ]))
+            }
+
+        case .user:
+            // Flush any pending tool responses before the user message
+            if !pendingToolResponses.isEmpty {
+                contents.append(Content(role: "user", parts: pendingToolResponses))
+                pendingToolResponses = []
+            }
+            contents.append(geminiContent(from: msg))
+
+        case .assistant:
+            // Flush any pending tool responses before the assistant message
+            if !pendingToolResponses.isEmpty {
+                contents.append(Content(role: "user", parts: pendingToolResponses))
+                pendingToolResponses = []
+            }
+
+            var parts: [Part] = []
+
+            // Add text content if present
+            let text = msg.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty {
+                parts.append(Part(text: text, inlineData: nil, functionCall: nil, functionResponse: nil))
+            }
+
+            // Add functionCall parts for any tool calls the model made
+            for tc in msg.toolCalls {
+                let argsDict: [String: AnyCodable]
+                if let data = tc.arguments.data(using: .utf8),
+                   let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    argsDict = dict.mapValues { AnyCodable($0) }
+                } else {
+                    argsDict = [:]
+                }
+                parts.append(Part(
+                    text: nil,
+                    inlineData: nil,
+                    functionCall: Part.FunctionCallPart(name: tc.name, args: argsDict),
+                    functionResponse: nil
+                ))
+            }
+
+            // Ensure at least one part
+            if parts.isEmpty {
+                parts.append(Part(text: "", inlineData: nil, functionCall: nil, functionResponse: nil))
+            }
+
+            contents.append(Content(role: "model", parts: parts))
+
+        case .tool:
+            // Collect tool results as functionResponse parts.
+            // These will be flushed as a single "user" content entry before the next message.
+            guard let toolResult = msg.toolResult else { continue }
+
+            let responseContent: [String: AnyCodable] = [
+                "result": AnyCodable(msg.content)
+            ]
+            pendingToolResponses.append(Part(
+                text: nil,
+                inlineData: nil,
+                functionCall: nil,
+                functionResponse: Part.FunctionResponsePart(
+                    name: toolResult.toolName,
+                    response: AnyCodable(responseContent)
+                )
+            ))
+        }
+    }
+
+    // Flush any remaining tool responses at the end (before LLM generates next response)
+    if !pendingToolResponses.isEmpty {
+        contents.append(Content(role: "user", parts: pendingToolResponses))
+    }
+
+    return contents
+}
+
 /// Build a Gemini content object from an LLMChatMessage, converting attachments.
+/// Used only for user messages (assistant/tool messages are handled in buildGeminiContents).
 private func geminiContent(from msg: LLMChatMessage) -> GeminiStreamRequest.Content {
     typealias Part = GeminiStreamRequest.Content.Part
 
@@ -70,7 +177,9 @@ private func geminiContent(from msg: LLMChatMessage) -> GeminiStreamRequest.Cont
     for att in msg.attachments where att.isText {
         parts.append(.init(
             text: "--- File: \(att.fileName) ---\n\(att.content)\n--- End of \(att.fileName) ---",
-            inlineData: nil
+            inlineData: nil,
+            functionCall: nil,
+            functionResponse: nil
         ))
     }
 
@@ -78,7 +187,9 @@ private func geminiContent(from msg: LLMChatMessage) -> GeminiStreamRequest.Cont
     for att in msg.attachments where att.isImage {
         parts.append(.init(
             text: nil,
-            inlineData: .init(mimeType: att.mimeType, data: att.content)
+            inlineData: .init(mimeType: att.mimeType, data: att.content),
+            functionCall: nil,
+            functionResponse: nil
         ))
     }
 
@@ -86,18 +197,20 @@ private func geminiContent(from msg: LLMChatMessage) -> GeminiStreamRequest.Cont
     for att in msg.attachments where !att.isText && !att.isImage {
         parts.append(.init(
             text: "[Attached file: \(att.fileName) (\(att.fileSizeLabel))]",
-            inlineData: nil
+            inlineData: nil,
+            functionCall: nil,
+            functionResponse: nil
         ))
     }
 
     // Add user text
     if !msg.content.isEmpty {
-        parts.append(.init(text: msg.content, inlineData: nil))
+        parts.append(.init(text: msg.content, inlineData: nil, functionCall: nil, functionResponse: nil))
     }
 
     // Ensure at least one part (Gemini requires non-empty parts)
     if parts.isEmpty {
-        parts.append(.init(text: "", inlineData: nil))
+        parts.append(.init(text: "", inlineData: nil, functionCall: nil, functionResponse: nil))
     }
 
     return .init(role: role, parts: parts)
@@ -106,8 +219,8 @@ private func geminiContent(from msg: LLMChatMessage) -> GeminiStreamRequest.Cont
 private func streamGeminiSSE(
     bytes: URLSession.AsyncBytes,
     response: URLResponse,
-    onDelta: @escaping @Sendable (String) async -> Void
-) async throws {
+    onEvent: @escaping @Sendable (StreamEvent) async -> Void
+) async throws -> StreamResult {
     guard let http = response as? HTTPURLResponse else {
         throw AdapterError.invalidResponse
     }
@@ -122,6 +235,9 @@ private func streamGeminiSSE(
 
     var emittedAny = false
     let decoder = JSONDecoder()
+    var fullText = ""
+    var toolCalls: [ToolCallInfo] = []
+    var toolCallIndex = 0
 
     for try await line in bytes.lines {
         try Task.checkCancellation()
@@ -137,7 +253,18 @@ private func streamGeminiSSE(
                 for part in candidate.content?.parts ?? [] {
                     if let text = part.text, !text.isEmpty {
                         emittedAny = true
-                        await onDelta(text)
+                        fullText += text
+                        await onEvent(.textDelta(text))
+                    }
+                    if let fc = part.functionCall {
+                        let id = "gemini-tc-\(toolCallIndex)"
+                        let argsData = try? JSONSerialization.data(withJSONObject: fc.args ?? [:])
+                        let argsString = argsData.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+                        toolCalls.append(ToolCallInfo(id: id, name: fc.name, arguments: argsString, serverName: ""))
+                        await onEvent(.toolCallStart(index: toolCallIndex, id: id, name: fc.name))
+                        await onEvent(.toolCallArgumentDelta(index: toolCallIndex, delta: argsString))
+                        toolCallIndex += 1
+                        emittedAny = true
                     }
                 }
             }
@@ -152,6 +279,25 @@ private func streamGeminiSSE(
     if !emittedAny {
         throw AdapterError.missingResponseText
     }
+
+    await onEvent(.done)
+    return StreamResult(text: fullText, toolCalls: toolCalls)
+}
+
+private func geminiToolDefs(from mcpTools: [MCPTool]) -> [GeminiStreamRequest.Tool]? {
+    guard !mcpTools.isEmpty else { return nil }
+    let declarations = mcpTools.map { tool in
+        // Gemini doesn't support $schema or additionalProperties in parameters
+        var params = tool.inputSchema.mapValues { $0.value }
+        params.removeValue(forKey: "$schema")
+        params.removeValue(forKey: "additionalProperties")
+        return GeminiStreamRequest.Tool.FunctionDeclaration(
+            name: tool.name,
+            description: tool.description,
+            parameters: AnyCodable(params)
+        )
+    }
+    return [GeminiStreamRequest.Tool(functionDeclarations: declarations)]
 }
 
 private func validateGeminiHTTPResponse(_ response: URLResponse, data: Data) throws {
@@ -183,10 +329,22 @@ struct GeminiStreamRequest: Encodable {
         struct Part: Encodable {
             let text: String?
             let inlineData: InlineData?
+            let functionCall: FunctionCallPart?
+            let functionResponse: FunctionResponsePart?
 
             struct InlineData: Encodable {
                 let mimeType: String
                 let data: String
+            }
+
+            struct FunctionCallPart: Encodable {
+                let name: String
+                let args: [String: AnyCodable]?
+            }
+
+            struct FunctionResponsePart: Encodable {
+                let name: String
+                let response: AnyCodable
             }
         }
 
@@ -194,7 +352,23 @@ struct GeminiStreamRequest: Encodable {
         let parts: [Part]
     }
 
+    struct Tool: Encodable {
+        struct FunctionDeclaration: Encodable {
+            let name: String
+            let description: String
+            let parameters: AnyCodable
+        }
+
+        let functionDeclarations: [FunctionDeclaration]
+    }
+
     let contents: [Content]
+    let tools: [Tool]?
+
+    init(contents: [Content], tools: [Tool]? = nil) {
+        self.contents = contents
+        self.tools = tools
+    }
 }
 
 struct GeminiStreamChunk: Decodable {
@@ -202,6 +376,7 @@ struct GeminiStreamChunk: Decodable {
         struct Content: Decodable {
             struct Part: Decodable {
                 let text: String?
+                let functionCall: FunctionCall?
             }
 
             let parts: [Part]?
@@ -211,6 +386,33 @@ struct GeminiStreamChunk: Decodable {
     }
 
     let candidates: [Candidate]?
+}
+
+struct GeminiFunctionCall: Decodable {
+    let name: String
+    let args: [String: AnyCodable]?
+}
+
+// Extension to decode functionCall in parts
+extension GeminiStreamChunk.Candidate.Content.Part {
+    struct FunctionCall: Decodable {
+        let name: String
+        let args: [String: Any]?
+
+        enum CodingKeys: String, CodingKey {
+            case name, args
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            name = try container.decode(String.self, forKey: .name)
+            if let argsAnyCodable = try container.decodeIfPresent(AnyCodable.self, forKey: .args) {
+                args = argsAnyCodable.asDictionary
+            } else {
+                args = nil
+            }
+        }
+    }
 }
 
 struct GeminiErrorEnvelope: Decodable {

@@ -31,8 +31,9 @@ struct AnthropicAdapter: LLMProviderAdapter {
         history: [LLMChatMessage],
         modelID: String,
         apiKey: String,
-        onDelta: @escaping @Sendable (String) async -> Void
-    ) async throws {
+        tools: [MCPTool],
+        onEvent: @escaping @Sendable (StreamEvent) async -> Void
+    ) async throws -> StreamResult {
         var request = URLRequest(url: URL(string: "\(baseURL)/messages")!)
         request.httpMethod = "POST"
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
@@ -43,17 +44,19 @@ struct AnthropicAdapter: LLMProviderAdapter {
         let systemMessage = history.first { $0.role == .system }?.content
         let conversationHistory = history.filter { $0.role != .system }
 
+        let toolDefs = anthropicToolDefs(from: tools)
         let body = AnthropicMessagesRequest(
             model: modelID,
             max_tokens: 8192,
             system: systemMessage,
             stream: true,
-            messages: conversationHistory.map { anthropicMessage(from: $0) }
+            messages: conversationHistory.map { anthropicMessage(from: $0) },
+            tools: toolDefs
         )
         request.httpBody = try JSONEncoder().encode(body)
 
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
-        try await streamAnthropicSSE(bytes: bytes, response: response, onDelta: onDelta)
+        return try await streamAnthropicSSE(bytes: bytes, response: response, onEvent: onEvent)
     }
 }
 
@@ -61,9 +64,39 @@ private func anthropicMessage(from msg: LLMChatMessage) -> AnthropicMessagesRequ
     typealias M = AnthropicMessagesRequest.Message
     typealias C = M.Content
 
-    let role = msg.role == .user ? "user" : "assistant"
+    let role = msg.role == .user ? "user" : (msg.role == .tool ? "user" : "assistant")
 
-    // No attachments → plain text
+    // Tool result messages — sent as user messages with tool_result content blocks
+    if msg.role == .tool, let toolResult = msg.toolResult {
+        let block = C.ContentBlock.toolResult(
+            toolUseId: toolResult.toolCallID,
+            content: toolResult.content,
+            isError: toolResult.isError
+        )
+        return M(role: "user", content: .blocks([block]))
+    }
+
+    // Assistant messages with tool calls
+    if msg.role == .assistant && !msg.toolCalls.isEmpty {
+        var blocks: [C.ContentBlock] = []
+        if !msg.content.isEmpty {
+            blocks.append(.text(msg.content))
+        }
+        for tc in msg.toolCalls {
+            // Parse arguments JSON string into a dict
+            let inputDict: [String: Any]
+            if let data = tc.arguments.data(using: .utf8),
+               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                inputDict = dict
+            } else {
+                inputDict = [:]
+            }
+            blocks.append(.toolUse(id: tc.id, name: tc.name, input: inputDict))
+        }
+        return M(role: "assistant", content: .blocks(blocks))
+    }
+
+    // No attachments -> plain text
     guard !msg.attachments.isEmpty else {
         return M(role: role, content: .text(msg.content))
     }
@@ -96,8 +129,8 @@ private func anthropicMessage(from msg: LLMChatMessage) -> AnthropicMessagesRequ
 private func streamAnthropicSSE(
     bytes: URLSession.AsyncBytes,
     response: URLResponse,
-    onDelta: @escaping @Sendable (String) async -> Void
-) async throws {
+    onEvent: @escaping @Sendable (StreamEvent) async -> Void
+) async throws -> StreamResult {
     guard let http = response as? HTTPURLResponse else {
         throw AdapterError.invalidResponse
     }
@@ -112,6 +145,10 @@ private func streamAnthropicSSE(
 
     var emittedAny = false
     let decoder = JSONDecoder()
+    var fullText = ""
+    // Track tool use blocks being assembled
+    var currentToolUseIndex = 0
+    var toolUseAccumulators: [Int: (id: String, name: String, arguments: String)] = [:]
 
     for try await line in bytes.lines {
         try Task.checkCancellation()
@@ -122,12 +159,36 @@ private func streamAnthropicSSE(
         guard !payload.isEmpty, let data = payload.data(using: .utf8) else { continue }
 
         if let event = try? decoder.decode(AnthropicStreamEvent.self, from: data) {
-            if event.type == "content_block_delta",
-               let delta = event.delta,
-               delta.type == "text_delta",
-               let text = delta.text, !text.isEmpty {
-                emittedAny = true
-                await onDelta(text)
+            switch event.type {
+            case "content_block_start":
+                if let contentBlock = event.contentBlock {
+                    if contentBlock.type == "tool_use" {
+                        let id = contentBlock.id ?? ""
+                        let name = contentBlock.name ?? ""
+                        toolUseAccumulators[currentToolUseIndex] = (id: id, name: name, arguments: "")
+                        await onEvent(.toolCallStart(index: currentToolUseIndex, id: id, name: name))
+                        emittedAny = true
+                    }
+                }
+
+            case "content_block_delta":
+                if let delta = event.delta {
+                    if delta.type == "text_delta", let text = delta.text, !text.isEmpty {
+                        emittedAny = true
+                        fullText += text
+                        await onEvent(.textDelta(text))
+                    } else if delta.type == "input_json_delta", let partial = delta.partialJson, !partial.isEmpty {
+                        toolUseAccumulators[currentToolUseIndex]?.arguments += partial
+                        await onEvent(.toolCallArgumentDelta(index: currentToolUseIndex, delta: partial))
+                        emittedAny = true
+                    }
+                }
+
+            case "content_block_stop":
+                currentToolUseIndex += 1
+
+            default:
+                break
             }
             continue
         }
@@ -139,6 +200,24 @@ private func streamAnthropicSSE(
 
     if !emittedAny {
         throw AdapterError.missingResponseText
+    }
+
+    let toolCalls = toolUseAccumulators.sorted(by: { $0.key < $1.key }).map { (_, acc) in
+        ToolCallInfo(id: acc.id, name: acc.name, arguments: acc.arguments, serverName: "")
+    }
+
+    await onEvent(.done)
+    return StreamResult(text: fullText, toolCalls: toolCalls)
+}
+
+private func anthropicToolDefs(from mcpTools: [MCPTool]) -> [AnthropicToolDefinition]? {
+    guard !mcpTools.isEmpty else { return nil }
+    return mcpTools.map { tool in
+        AnthropicToolDefinition(
+            name: tool.name,
+            description: tool.description,
+            input_schema: AnyCodable(tool.inputSchema.mapValues { $0.value })
+        )
     }
 }
 
@@ -170,6 +249,12 @@ struct AnthropicModelsResponse: Decodable {
     let data: [Model]
 }
 
+struct AnthropicToolDefinition: Encodable {
+    let name: String
+    let description: String
+    let input_schema: AnyCodable
+}
+
 struct AnthropicMessagesRequest: Encodable {
     struct Message: Encodable {
         enum Content: Encodable {
@@ -189,6 +274,8 @@ struct AnthropicMessagesRequest: Encodable {
             enum ContentBlock: Encodable {
                 case text(String)
                 case image(mediaType: String, data: String)
+                case toolUse(id: String, name: String, input: [String: Any])
+                case toolResult(toolUseId: String, content: String, isError: Bool)
 
                 func encode(to encoder: Encoder) throws {
                     var container = encoder.container(keyedBy: CodingKeys.self)
@@ -202,11 +289,26 @@ struct AnthropicMessagesRequest: Encodable {
                             ImageSource(type: "base64", media_type: mediaType, data: data),
                             forKey: .source
                         )
+                    case .toolUse(let id, let name, let input):
+                        try container.encode("tool_use", forKey: .type)
+                        try container.encode(id, forKey: .id)
+                        try container.encode(name, forKey: .name)
+                        try container.encode(AnyCodable(input), forKey: .input)
+                    case .toolResult(let toolUseId, let content, let isError):
+                        try container.encode("tool_result", forKey: .type)
+                        try container.encode(toolUseId, forKey: .toolUseId)
+                        try container.encode(content, forKey: .content)
+                        if isError {
+                            try container.encode(true, forKey: .isError)
+                        }
                     }
                 }
 
                 private enum CodingKeys: String, CodingKey {
-                    case type, text, source
+                    case type, text, source, id, name, input
+                    case toolUseId = "tool_use_id"
+                    case content
+                    case isError = "is_error"
                 }
 
                 private struct ImageSource: Encodable {
@@ -226,15 +328,34 @@ struct AnthropicMessagesRequest: Encodable {
     let system: String?
     let stream: Bool
     let messages: [Message]
+    let tools: [AnthropicToolDefinition]?
 }
 
 struct AnthropicStreamEvent: Decodable {
     let type: String
     let delta: Delta?
+    let contentBlock: ContentBlock?
 
     struct Delta: Decodable {
         let type: String?
         let text: String?
+        let partialJson: String?
+
+        enum CodingKeys: String, CodingKey {
+            case type, text
+            case partialJson = "partial_json"
+        }
+    }
+
+    struct ContentBlock: Decodable {
+        let type: String
+        let id: String?
+        let name: String?
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case type, delta
+        case contentBlock = "content_block"
     }
 }
 

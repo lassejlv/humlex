@@ -23,22 +23,40 @@ struct OpenAIAdapter: LLMProviderAdapter {
         history: [LLMChatMessage],
         modelID: String,
         apiKey: String,
-        onDelta: @escaping @Sendable (String) async -> Void
-    ) async throws {
+        tools: [MCPTool],
+        onEvent: @escaping @Sendable (StreamEvent) async -> Void
+    ) async throws -> StreamResult {
         var request = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
+        let toolDefs = openAIToolDefs(from: tools)
         let body = OpenAIChatStreamRequest(
             model: modelID,
             stream: true,
-            messages: history.map { apiMessage(from: $0) }
+            messages: history.map { apiMessage(from: $0) },
+            tools: toolDefs
         )
         request.httpBody = try JSONEncoder().encode(body)
 
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
-        try await streamSSE(bytes: bytes, response: response, onDelta: onDelta)
+        return try await streamSSE(bytes: bytes, response: response, onEvent: onEvent)
+    }
+}
+
+/// Convert MCP tools to OpenAI tool format as AnyCodable array.
+private func openAIToolDefs(from mcpTools: [MCPTool]) -> [[String: AnyCodable]]? {
+    guard !mcpTools.isEmpty else { return nil }
+    return mcpTools.map { tool in
+        [
+            "type": AnyCodable("function"),
+            "function": AnyCodable([
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.inputSchema.mapValues { $0.value }
+            ] as [String: Any])
+        ]
     }
 }
 

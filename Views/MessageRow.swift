@@ -33,6 +33,9 @@ struct MessageRow: View {
             if isUser {
                 Spacer(minLength: 0)
                 userBubble
+            } else if message.role == .tool {
+                toolResultBlock
+                Spacer(minLength: 0)
             } else {
                 assistantBlock
                 Spacer(minLength: 0)
@@ -69,15 +72,22 @@ struct MessageRow: View {
 
     private var assistantBlock: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if isStreaming && message.text.isEmpty {
+            if isStreaming && message.text.isEmpty && (message.toolCalls ?? []).isEmpty {
                 // Skeleton loading state
                 SkeletonView()
                     .frame(maxWidth: 760, alignment: .leading)
             } else {
-                MarkdownView(source: message.text, isStreaming: isStreaming)
-                    .textSelection(.enabled)
-                    .lineSpacing(4)
-                    .frame(maxWidth: 760, alignment: .leading)
+                if !message.text.isEmpty {
+                    MarkdownView(source: message.text, isStreaming: isStreaming)
+                        .textSelection(.enabled)
+                        .lineSpacing(4)
+                        .frame(maxWidth: 760, alignment: .leading)
+                }
+
+                // Show tool calls if present
+                if let toolCalls = message.toolCalls, !toolCalls.isEmpty {
+                    toolCallsView(toolCalls)
+                }
             }
 
             // Action bar: timestamp + copy + retry
@@ -110,6 +120,69 @@ struct MessageRow: View {
                 hideTask = task
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: task)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func toolCallsView(_ toolCalls: [ChatMessage.ToolCall]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(toolCalls, id: \.id) { tc in
+                HStack(spacing: 6) {
+                    Image(systemName: "wrench.and.screwdriver")
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.accent)
+                    Text(tc.name)
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .foregroundStyle(theme.textPrimary)
+                    if !tc.serverName.isEmpty {
+                        Text("(\(tc.serverName))")
+                            .font(.system(size: 11))
+                            .foregroundStyle(theme.textTertiary)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(theme.codeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(theme.codeBorder, lineWidth: 1)
+                )
+            }
+        }
+        .frame(maxWidth: 760, alignment: .leading)
+    }
+
+    private var toolResultBlock: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            // Header
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.turn.down.right")
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.accent)
+                Text("Tool Result")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(theme.textSecondary)
+                if let name = message.toolName {
+                    Text(name)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(theme.textTertiary)
+                }
+            }
+
+            // Result content
+            Text(message.text)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(theme.textSecondary)
+                .textSelection(.enabled)
+                .lineLimit(8)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: 760, alignment: .leading)
+                .background(theme.codeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(theme.codeBorder, lineWidth: 1)
+                )
         }
     }
 

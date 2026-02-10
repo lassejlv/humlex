@@ -29,17 +29,38 @@ enum ChatRole: String, Hashable {
     case system
     case user
     case assistant
+    case tool
+}
+
+/// Represents a tool call request from the LLM.
+struct ToolCallInfo: Hashable {
+    let id: String
+    let name: String
+    let arguments: String  // JSON string of arguments
+    let serverName: String // MCP server that owns this tool
+}
+
+/// Represents the result of executing a tool call.
+struct ToolResultInfo: Hashable {
+    let toolCallID: String
+    let toolName: String
+    let content: String
+    let isError: Bool
 }
 
 struct LLMChatMessage: Hashable {
     let role: ChatRole
     let content: String
     let attachments: [Attachment]
+    let toolCalls: [ToolCallInfo]    // Non-empty when assistant requests tool calls
+    let toolResult: ToolResultInfo?  // Non-nil when role == .tool
 
-    init(role: ChatRole, content: String, attachments: [Attachment] = []) {
+    init(role: ChatRole, content: String, attachments: [Attachment] = [], toolCalls: [ToolCallInfo] = [], toolResult: ToolResultInfo? = nil) {
         self.role = role
         self.content = content
         self.attachments = attachments
+        self.toolCalls = toolCalls
+        self.toolResult = toolResult
     }
 }
 
@@ -55,15 +76,33 @@ struct LLMModel: Identifiable, Hashable {
     }
 }
 
+/// Represents a structured streaming event from the LLM.
+enum StreamEvent: Sendable {
+    case textDelta(String)
+    case toolCallStart(index: Int, id: String, name: String)
+    case toolCallArgumentDelta(index: Int, delta: String)
+    case done
+}
+
+/// The result of a completed streaming response.
+struct StreamResult {
+    let text: String
+    let toolCalls: [ToolCallInfo]
+}
+
 protocol LLMProviderAdapter {
     var provider: AIProvider { get }
     func fetchModels(apiKey: String) async throws -> [LLMModel]
+
+    /// Stream a message with optional tool definitions.
+    /// Returns a StreamResult containing the full text and any tool calls.
     func streamMessage(
         history: [LLMChatMessage],
         modelID: String,
         apiKey: String,
-        onDelta: @escaping @Sendable (String) async -> Void
-    ) async throws
+        tools: [MCPTool],
+        onEvent: @escaping @Sendable (StreamEvent) async -> Void
+    ) async throws -> StreamResult
 }
 
 enum AdapterError: LocalizedError {
