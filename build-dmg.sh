@@ -37,9 +37,24 @@ CONTENTS_DIR="${APP_BUNDLE}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 
+FRAMEWORKS_DIR="${CONTENTS_DIR}/Frameworks"
+
 rm -rf "${APP_BUNDLE}"
-mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
+mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}" "${FRAMEWORKS_DIR}"
 cp "${BIN_PATH}" "${MACOS_DIR}/${APP_DISPLAY_NAME}"
+
+# Embed Sparkle.framework into the app bundle
+SPARKLE_FW="$(dirname "${BIN_PATH}")/Sparkle.framework"
+if [ -d "${SPARKLE_FW}" ]; then
+    echo "    Embedding Sparkle.framework..."
+    cp -R "${SPARKLE_FW}" "${FRAMEWORKS_DIR}/"
+    # Add rpath so the binary can find the framework in Contents/Frameworks/
+    install_name_tool -add_rpath "@executable_path/../Frameworks" "${MACOS_DIR}/${APP_DISPLAY_NAME}" 2>/dev/null || true
+    # Re-sign after modifying the binary (install_name_tool invalidates the ad-hoc signature)
+    codesign --force --sign - "${MACOS_DIR}/${APP_DISPLAY_NAME}"
+else
+    echo "    Warning: Sparkle.framework not found at ${SPARKLE_FW}"
+fi
 
 # ── 2. Generate .icns ────────────────────────────────────────────────
 echo "[2/5] Generating app icon..."
