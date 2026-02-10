@@ -21,15 +21,8 @@ struct ContentView: View {
     @State private var threads: [ChatThread] = [
         ChatThread(
             id: UUID(),
-            title: "Welcome Chat",
-            messages: [
-                ChatMessage(
-                    id: UUID(),
-                    role: .assistant,
-                    text: "Open Settings, add provider API keys, fetch models, then start chatting.",
-                    timestamp: .now.addingTimeInterval(-120)
-                )
-            ]
+            title: "New Chat",
+            messages: []
         )
     ]
 
