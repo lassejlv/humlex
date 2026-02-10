@@ -2,6 +2,7 @@ import SwiftUI
 
 enum SettingsTab: String, CaseIterable, Identifiable {
     case providers = "Providers"
+    case experimental = "Experimental"
     case mcp = "MCP Servers"
     case theme = "Theme"
 
@@ -10,6 +11,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .providers: return "bolt.horizontal"
+        case .experimental: return "flask"
         case .mcp: return "server.rack"
         case .theme: return "paintbrush"
         }
@@ -39,7 +41,10 @@ struct SettingsView: View {
     @State private var claudeCodeAvailability: ClaudeCodeAvailability?
     @State private var codexAvailability: CodexAvailability?
     @State private var isLoggingIntoCodex = false
-    @AppStorage("codex_sandbox_mode") private var codexSandboxModeRaw: String = CodexSandboxMode.readOnly.rawValue
+    @AppStorage("experimental_claude_code_enabled") private var isClaudeCodeEnabled = false
+    @AppStorage("experimental_codex_enabled") private var isCodexEnabled = false
+    @AppStorage("codex_sandbox_mode") private var codexSandboxModeRaw: String = CodexSandboxMode
+        .readOnly.rawValue
 
     // MCP add server form
     @State private var showAddServerForm = false
@@ -81,6 +86,8 @@ struct SettingsView: View {
                 switch selectedTab {
                 case .providers:
                     providerDetail
+                case .experimental:
+                    providerDetail
                 case .mcp:
                     mcpDetail
                 case .theme:
@@ -113,8 +120,19 @@ struct SettingsView: View {
                         .padding(.vertical, 4)
                         .padding(.horizontal, 8)
 
-                    ForEach(AIProvider.allCases) { provider in
+                    ForEach(providers(for: .providers)) { provider in
                         providerRow(provider)
+                    }
+                }
+
+                // Experimental provider sub-items
+                if selectedTab == .experimental {
+                    theme.divider.frame(height: 1)
+                        .padding(.vertical, 4)
+                        .padding(.horizontal, 8)
+
+                    ForEach(providers(for: .experimental)) { provider in
+                        experimentalProviderRow(provider)
                     }
                 }
 
@@ -169,7 +187,7 @@ struct SettingsView: View {
     }
 
     private func providerRow(_ provider: AIProvider) -> some View {
-        let isSelected = selectedTab == .providers && selectedProvider == provider
+        let isSelected = selectedProvider == provider && selectedTab == settingsTab(for: provider)
         let hasKey: Bool = {
             if provider == .claudeCode {
                 return claudeCodeAvailability?.isAvailable == true
@@ -177,11 +195,13 @@ struct SettingsView: View {
             if provider == .openAICodex {
                 return codexAvailability?.isAvailable == true
             }
-            return !apiKeyBinding(for: provider).wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return !apiKeyBinding(for: provider).wrappedValue.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty
         }()
 
         return Button {
-            selectedTab = .providers
+            selectedTab = settingsTab(for: provider)
             selectedProvider = provider
         } label: {
             HStack(spacing: 10) {
@@ -215,6 +235,44 @@ struct SettingsView: View {
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
+    }
+
+    private func experimentalProviderRow(_ provider: AIProvider) -> some View {
+        let isSelected = selectedProvider == provider && selectedTab == .experimental
+        let isEnabled = experimentalToggleBinding(for: provider).wrappedValue
+
+        return HStack(spacing: 8) {
+            Button {
+                selectedTab = .experimental
+                selectedProvider = provider
+            } label: {
+                HStack(spacing: 10) {
+                    ProviderIcon(slug: provider.iconSlug, size: 18)
+                        .foregroundColor(isSelected ? theme.accent : theme.textSecondary)
+
+                    Text(provider.rawValue)
+                        .font(.system(size: 13))
+                        .foregroundStyle(isEnabled ? theme.textPrimary : theme.textTertiary)
+
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(
+                    isSelected
+                        ? theme.selectionBackground
+                        : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+
+            Toggle("", isOn: experimentalToggleBinding(for: provider))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .scaleEffect(0.75)
+        }
     }
 
     private func mcpServerRow(_ name: String) -> some View {
@@ -285,6 +343,12 @@ struct SettingsView: View {
                 checkCodexAvailability()
             }
         }
+        .onChange(of: selectedTab) { _, newValue in
+            let available = providers(for: newValue)
+            if let first = available.first, !available.contains(selectedProvider) {
+                selectedProvider = first
+            }
+        }
     }
 
     // MARK: - Claude Code Detail
@@ -328,7 +392,10 @@ struct SettingsView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
-                .background(theme.surfaceBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(
+                    theme.surfaceBackground,
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .stroke(theme.composerBorder, lineWidth: 1)
@@ -360,7 +427,9 @@ struct SettingsView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(theme.codeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(
+                    theme.codeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .stroke(theme.codeBorder, lineWidth: 1)
@@ -420,7 +489,10 @@ struct SettingsView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
-                .background(theme.surfaceBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(
+                    theme.surfaceBackground,
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .stroke(theme.composerBorder, lineWidth: 1)
@@ -462,8 +534,10 @@ struct SettingsView: View {
                                         ProgressView()
                                             .controlSize(.mini)
                                     }
-                                    Text(isLoggingIntoCodex ? "Logging in..." : "Login with ChatGPT")
-                                        .font(.system(size: 12, weight: .medium))
+                                    Text(
+                                        isLoggingIntoCodex ? "Logging in..." : "Login with ChatGPT"
+                                    )
+                                    .font(.system(size: 12, weight: .medium))
                                 }
                             }
                             .buttonStyle(.borderedProminent)
@@ -473,7 +547,10 @@ struct SettingsView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
-                    .background(theme.surfaceBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .background(
+                        theme.surfaceBackground,
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    )
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .stroke(theme.composerBorder, lineWidth: 1)
@@ -488,7 +565,8 @@ struct SettingsView: View {
                     .foregroundStyle(theme.textSecondary)
 
                 VStack(spacing: 4) {
-                    ForEach(Array(CodexSandboxMode.allCases), id: \.self) { (mode: CodexSandboxMode) in
+                    ForEach(Array(CodexSandboxMode.allCases), id: \.self) {
+                        (mode: CodexSandboxMode) in
                         let modeSelected = (codexSandboxModeRaw == mode.rawValue)
                         Button {
                             codexSandboxModeRaw = mode.rawValue
@@ -496,12 +574,18 @@ struct SettingsView: View {
                             HStack(spacing: 10) {
                                 Image(systemName: mode.icon)
                                     .font(.system(size: 13))
-                                    .foregroundStyle(modeSelected ? theme.accent : theme.textSecondary)
+                                    .foregroundStyle(
+                                        modeSelected ? theme.accent : theme.textSecondary
+                                    )
                                     .frame(width: 20)
 
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(mode.displayName)
-                                        .font(.system(size: 13, weight: modeSelected ? .semibold : .regular))
+                                        .font(
+                                            .system(
+                                                size: 13,
+                                                weight: modeSelected ? .semibold : .regular)
+                                        )
                                         .foregroundStyle(theme.textPrimary)
 
                                     Text(mode.description)
@@ -528,7 +612,10 @@ struct SettingsView: View {
                     }
                 }
                 .padding(4)
-                .background(theme.surfaceBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(
+                    theme.surfaceBackground,
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .stroke(theme.composerBorder, lineWidth: 1)
@@ -542,9 +629,11 @@ struct SettingsView: View {
                     .foregroundStyle(theme.textSecondary)
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("OpenAI Codex uses your ChatGPT Plus or Pro subscription — no API key needed.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(theme.textSecondary)
+                    Text(
+                        "OpenAI Codex uses your ChatGPT Plus or Pro subscription — no API key needed."
+                    )
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.textSecondary)
 
                     HStack(spacing: 6) {
                         Text("Install:")
@@ -571,7 +660,9 @@ struct SettingsView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(theme.codeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(
+                    theme.codeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .stroke(theme.codeBorder, lineWidth: 1)
@@ -632,6 +723,8 @@ struct SettingsView: View {
     @ViewBuilder
     private var statusBadge: some View {
         let count = modelCounts[selectedProvider] ?? 0
+        let isEnabled = !isExperimentalProvider(selectedProvider)
+            || experimentalToggleBinding(for: selectedProvider).wrappedValue
         let hasKey: Bool = {
             if selectedProvider == .claudeCode {
                 return claudeCodeAvailability?.isAvailable == true
@@ -639,10 +732,23 @@ struct SettingsView: View {
             if selectedProvider == .openAICodex {
                 return codexAvailability?.isAvailable == true
             }
-            return !apiKeyBinding(for: selectedProvider).wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return !apiKeyBinding(for: selectedProvider).wrappedValue.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty
         }()
 
-        if count > 0 {
+        if !isEnabled {
+            HStack(spacing: 4) {
+                Image(systemName: "pause.circle")
+                    .font(.system(size: 11))
+                Text("Disabled")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .foregroundStyle(theme.textSecondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(theme.chipBackground, in: Capsule())
+        } else if count > 0 {
             HStack(spacing: 4) {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 11))
@@ -706,7 +812,9 @@ struct SettingsView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(theme.textSecondary)
                         .frame(width: 24, height: 24)
-                        .background(theme.chipBackground, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .background(
+                            theme.chipBackground,
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .help(showAddServerForm ? "Cancel" : "Add server")
@@ -744,10 +852,13 @@ struct SettingsView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity)
-        .alert("Remove Server", isPresented: Binding<Bool>(
-            get: { serverToDelete != nil },
-            set: { if !$0 { serverToDelete = nil } }
-        )) {
+        .alert(
+            "Remove Server",
+            isPresented: Binding<Bool>(
+                get: { serverToDelete != nil },
+                set: { if !$0 { serverToDelete = nil } }
+            )
+        ) {
             Button("Cancel", role: .cancel) {
                 serverToDelete = nil
             }
@@ -760,7 +871,9 @@ struct SettingsView: View {
                 serverToDelete = nil
             }
         } message: {
-            Text("Are you sure you want to remove \"\(serverToDelete ?? "")\"? This will update your mcp.json config file.")
+            Text(
+                "Are you sure you want to remove \"\(serverToDelete ?? "")\"? This will update your mcp.json config file."
+            )
         }
     }
 
@@ -789,8 +902,13 @@ struct SettingsView: View {
 
             mcpFormField(label: "Name", placeholder: "e.g. filesystem", text: $newServerName)
             mcpFormField(label: "Command", placeholder: "e.g. npx", text: $newServerCommand)
-            mcpFormField(label: "Arguments", placeholder: "e.g. -y @modelcontextprotocol/server-filesystem /path", text: $newServerArgs)
-            mcpFormField(label: "Environment", placeholder: "e.g. API_KEY=abc123 OTHER=value", text: $newServerEnv)
+            mcpFormField(
+                label: "Arguments",
+                placeholder: "e.g. -y @modelcontextprotocol/server-filesystem /path",
+                text: $newServerArgs)
+            mcpFormField(
+                label: "Environment", placeholder: "e.g. API_KEY=abc123 OTHER=value",
+                text: $newServerEnv)
 
             HStack {
                 Spacer()
@@ -814,22 +932,28 @@ struct SettingsView: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 6)
-                        .background(theme.accent, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .background(
+                            theme.accent, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .disabled(newServerName.trimmingCharacters(in: .whitespaces).isEmpty ||
-                          newServerCommand.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(
+                    newServerName.trimmingCharacters(in: .whitespaces).isEmpty
+                        || newServerCommand.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
         .padding(14)
-        .background(theme.surfaceBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(
+            theme.surfaceBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(theme.accent.opacity(0.3), lineWidth: 1)
         )
     }
 
-    private func mcpFormField(label: String, placeholder: String, text: Binding<String>) -> some View {
+    private func mcpFormField(label: String, placeholder: String, text: Binding<String>)
+        -> some View
+    {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
                 .font(.system(size: 11, weight: .medium))
@@ -841,7 +965,9 @@ struct SettingsView: View {
                 .foregroundStyle(theme.textPrimary)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(theme.codeBackground, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .background(
+                    theme.codeBackground, in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                )
                 .overlay(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .stroke(theme.codeBorder, lineWidth: 1)
@@ -860,7 +986,8 @@ struct SettingsView: View {
         // Parse env: "KEY=value KEY2=value2"
         let env = parseEnv(newServerEnv)
 
-        await mcpManager.addServer(name: name, command: command, args: args, env: env.isEmpty ? nil : env)
+        await mcpManager.addServer(
+            name: name, command: command, args: args, env: env.isEmpty ? nil : env)
 
         withAnimation(.easeInOut(duration: 0.2)) {
             resetAddServerForm()
@@ -936,10 +1063,13 @@ struct SettingsView: View {
 
                 Button {
                     // Open the config directory in Finder
-                    let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+                    let appSupport = FileManager.default.urls(
+                        for: .applicationSupportDirectory, in: .userDomainMask
+                    ).first!
                     let appDir = appSupport.appendingPathComponent("Humlex")
                     // Create directory if it doesn't exist
-                    try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
+                    try? FileManager.default.createDirectory(
+                        at: appDir, withIntermediateDirectories: true)
                     NSWorkspace.shared.open(appDir)
                 } label: {
                     Image(systemName: "folder")
@@ -951,7 +1081,9 @@ struct SettingsView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(theme.codeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(
+                theme.codeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(theme.codeBorder, lineWidth: 1)
@@ -1030,7 +1162,10 @@ struct SettingsView: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(theme.textSecondary)
 
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 6)], alignment: .leading, spacing: 6) {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 100), spacing: 6)],
+                        alignment: .leading, spacing: 6
+                    ) {
                         ForEach(serverTools) { tool in
                             mcpToolChip(tool)
                         }
@@ -1043,7 +1178,9 @@ struct SettingsView: View {
             }
         }
         .padding(12)
-        .background(theme.hoverBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(
+            theme.hoverBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(theme.chipBorder, lineWidth: 1)
@@ -1189,21 +1326,6 @@ struct SettingsView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 12) {
-            Button {
-                onClose()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    appUpdater.checkForUpdates()
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 11))
-                    Text("Check for Updates")
-                        .font(.system(size: 12, weight: .medium))
-                }
-            }
-            .disabled(!appUpdater.canCheckForUpdates)
-
             if let statusMessage {
                 Text(statusMessage)
                     .font(.system(size: 11))
@@ -1263,5 +1385,35 @@ struct SettingsView: View {
         case .claudeCode: return .constant("")  // Claude Code doesn't use an API key
         case .openAICodex: return .constant("")  // Codex doesn't use an API key
         }
+    }
+
+    private func providers(for tab: SettingsTab) -> [AIProvider] {
+        switch tab {
+        case .providers:
+            return AIProvider.allCases.filter { !isExperimentalProvider($0) }
+        case .experimental:
+            return AIProvider.allCases.filter { isExperimentalProvider($0) }
+        case .mcp, .theme:
+            return []
+        }
+    }
+
+    private func settingsTab(for provider: AIProvider) -> SettingsTab {
+        isExperimentalProvider(provider) ? .experimental : .providers
+    }
+
+    private func experimentalToggleBinding(for provider: AIProvider) -> Binding<Bool> {
+        switch provider {
+        case .claudeCode:
+            return $isClaudeCodeEnabled
+        case .openAICodex:
+            return $isCodexEnabled
+        default:
+            return .constant(true)
+        }
+    }
+
+    private func isExperimentalProvider(_ provider: AIProvider) -> Bool {
+        provider == .claudeCode || provider == .openAICodex
     }
 }

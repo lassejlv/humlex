@@ -8,6 +8,11 @@
 import SwiftUI
 import AppKit
 
+extension Notification.Name {
+    static let openSettingsRequested = Notification.Name("openSettingsRequested")
+    static let openModelPickerRequested = Notification.Name("openModelPickerRequested")
+}
+
 @main
 struct AI_ChatApp: App {
     @StateObject private var themeManager = ThemeManager.shared
@@ -35,6 +40,13 @@ struct AI_ChatApp: App {
         }
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings") {
+                    NotificationCenter.default.post(name: .openSettingsRequested, object: nil)
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+
             CommandGroup(replacing: .appTermination) {
                 Button("Quit Humlex") {
                     terminateHumlex()
@@ -73,11 +85,21 @@ private struct ForceQuitShortcutModifier: ViewModifier {
                 if monitor != nil { return }
                 monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                     guard event.modifierFlags.contains(.command),
-                          event.charactersIgnoringModifiers?.lowercased() == "q" else {
+                          let key = event.charactersIgnoringModifiers?.lowercased() else {
                         return event
                     }
-                    terminateHumlex()
-                    return nil
+
+                    if key == "q" {
+                        terminateHumlex()
+                        return nil
+                    }
+
+                    if key == "," {
+                        NotificationCenter.default.post(name: .openSettingsRequested, object: nil)
+                        return nil
+                    }
+
+                    return event
                 }
             }
             .onDisappear {
