@@ -12,6 +12,8 @@ struct ContentView: View {
     @AppStorage("selected_model_reference") private var selectedModelReference: String = ""
     @AppStorage("selected_thread_id") private var selectedThreadIDRaw: String = ""
     @AppStorage("codex_sandbox_mode") private var codexSandboxModeRaw: String = CodexSandboxMode.readOnly.rawValue
+    @AppStorage("experimental_claude_code_enabled") private var isClaudeCodeEnabled = false
+    @AppStorage("experimental_codex_enabled") private var isCodexEnabled = false
 
     @State private var models: [LLMModel] = []
     @State private var isLoadingModels = false
@@ -37,8 +39,6 @@ struct ContentView: View {
     @State private var geminiAPIKey: String = ""
     @State private var didLoadAPIKeys = false
     @State private var isShowingSettings = false
-    @State private var isShowingModelPicker = false
-    @State private var modelSearchText: String = ""
     @State private var streamingMessageID: UUID?
     @State private var persistWorkItem: DispatchWorkItem?
     @State private var streamingTask: Task<Void, Never>?
@@ -221,6 +221,17 @@ struct ContentView: View {
                     .buttonStyle(.plain)
                     .help("Settings")
 
+                    Button {
+                        appUpdater.checkForUpdates()
+                    } label: {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 14))
+                            .foregroundStyle(theme.textSecondary)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!appUpdater.canCheckForUpdates)
+                    .help("Check for Updates")
+
                     Spacer()
                 }
                 .padding(.horizontal, 16)
@@ -301,6 +312,8 @@ struct ContentView: View {
                 ChatComposerView(
                     draft: $draft,
                     attachments: $pendingAttachments,
+                    models: models,
+                    selectedModelReference: $selectedModelReference,
                     agentEnabled: agentEnabledBinding,
                     dangerousMode: dangerousModeBinding,
                     workingDirectory: workingDirectoryBinding,
@@ -316,19 +329,6 @@ struct ContentView: View {
                 }
             }
             .background(theme.background)
-            .toolbar {
-                ToolbarItem(placement: .navigation) {
-                    modelMenu
-                }
-
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        isShowingSettings = true
-                    } label: {
-                        Image(systemName: "sidebar.right")
-                    }
-                }
-            }
         }
         .sheet(isPresented: $isShowingSettings) {
             SettingsView(
@@ -402,6 +402,9 @@ struct ContentView: View {
         }
         .onDisappear {
             stopStreaming()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openSettingsRequested)) { _ in
+            isShowingSettings = true
         }
         .onChange(of: openAIAPIKey) { _, newValue in
             persistAPIKeyToKeychain(newValue, for: .openAI)
@@ -514,7 +517,7 @@ struct ContentView: View {
             icon: "cpu",
             shortcut: "M"
         ) {
-            isShowingModelPicker = true
+            NotificationCenter.default.post(name: .openModelPickerRequested, object: nil)
             toastManager.show(.info("Model picker opened", icon: "cpu"))
         })
 
@@ -657,33 +660,6 @@ struct ContentView: View {
         return actions
     }
 
-    private var modelMenu: some View {
-        Button {
-            isShowingModelPicker.toggle()
-        } label: {
-            HStack(spacing: 4) {
-                Text(selectedModelLabel)
-                    .fontWeight(.medium)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-            }
-            .foregroundStyle(theme.textPrimary)
-        }
-        .buttonStyle(.plain)
-        .controlSize(.small)
-        .fixedSize(horizontal: true, vertical: false)
-        .popover(isPresented: $isShowingModelPicker, arrowEdge: .bottom) {
-            ModelPickerPopover(
-                models: models,
-                selectedModelReference: $selectedModelReference,
-                searchText: $modelSearchText,
-                isPresented: $isShowingModelPicker
-            )
-        }
-    }
-
     private func createThread() {
         let thread = ChatThread(id: UUID(), title: "New Chat", messages: [])
         threads.insert(thread, at: 0)
@@ -776,6 +752,17 @@ struct ContentView: View {
             return "claude-code"  // Sentinel value — Claude Code authenticates via CLI
         case .openAICodex:
             return "codex"  // Sentinel value — Codex authenticates via CLI
+        }
+    }
+
+    private func isProviderEnabled(_ provider: AIProvider) -> Bool {
+        switch provider {
+        case .claudeCode:
+            return isClaudeCodeEnabled
+        case .openAICodex:
+            return isCodexEnabled
+        default:
+            return true
         }
     }
 
@@ -919,6 +906,7 @@ struct ContentView: View {
         defer { isLoadingModels = false }
 
         for provider in AIProvider.allCases {
+            guard isProviderEnabled(provider) else { continue }
             let key = apiKey(for: provider)
             guard !key.isEmpty || !provider.requiresAPIKey else { continue }
 
@@ -949,6 +937,7 @@ struct ContentView: View {
 
         var parts: [String] = []
         for provider in AIProvider.allCases {
+            guard isProviderEnabled(provider) else { continue }
             let count = collected.filter { $0.provider == provider }.count
             if count > 0 {
                 parts.append("\(provider.rawValue): \(count)")

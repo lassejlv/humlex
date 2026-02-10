@@ -15,6 +15,8 @@ struct MentionEntry: Identifiable, Hashable {
 struct ChatComposerView: View {
     @Binding var draft: String
     @Binding var attachments: [Attachment]
+    let models: [LLMModel]
+    @Binding var selectedModelReference: String
     @Binding var agentEnabled: Bool
     @Binding var dangerousMode: Bool
     @Binding var workingDirectory: String?
@@ -35,6 +37,12 @@ struct ChatComposerView: View {
     @State private var mentionResults: [MentionEntry] = []
     @State private var mentionSelectedIndex = 0
     @State private var previousDraft = ""
+    @State private var isShowingModelPicker = false
+    @State private var modelSearchText = ""
+
+    private var selectedModelLabel: String {
+        models.first(where: { $0.reference == selectedModelReference })?.displayName ?? "Select model"
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -79,6 +87,32 @@ struct ChatComposerView: View {
 
                 // Bottom bar: attach + @ mention + agent toggle + stop
                 HStack(spacing: 8) {
+                    Button {
+                        isShowingModelPicker.toggle()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(selectedModelLabel)
+                                .font(.system(size: 12, weight: .medium))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 10, weight: .semibold))
+                        }
+                        .foregroundStyle(theme.textSecondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(theme.hoverBackground, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .popover(isPresented: $isShowingModelPicker, arrowEdge: .top) {
+                        ModelPickerPopover(
+                            models: models,
+                            selectedModelReference: $selectedModelReference,
+                            searchText: $modelSearchText,
+                            isPresented: $isShowingModelPicker
+                        )
+                    }
+
                     Button {
                         presentAttachmentOpenPanel()
                     } label: {
@@ -217,6 +251,9 @@ struct ChatComposerView: View {
         .padding(.horizontal, 20)
         .padding(.bottom, 16)
         .padding(.top, 8)
+        .onReceive(NotificationCenter.default.publisher(for: .openModelPickerRequested)) { _ in
+            isShowingModelPicker = true
+        }
         .onKeyPress(.return, phases: .down) { keyPress in
             if showMentionPopup && !mentionResults.isEmpty {
                 selectMention(mentionResults[mentionSelectedIndex])
