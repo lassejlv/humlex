@@ -40,6 +40,7 @@ struct ChatComposerView: View {
     @State private var previousDraft = ""
     @State private var isShowingModelPicker = false
     @State private var modelSearchText = ""
+    @State private var isShowingMCPDropdown = false
 
     private var selectedModelLabel: String {
         models.first(where: { $0.reference == selectedModelReference })?.displayName ?? "Select model"
@@ -112,6 +113,28 @@ struct ChatComposerView: View {
                             searchText: $modelSearchText,
                             isPresented: $isShowingModelPicker
                         )
+                    }
+
+                    // MCP Server dropdown
+                    Button {
+                        isShowingMCPDropdown.toggle()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "server.rack")
+                                .font(.system(size: 11))
+                            Text("MCP")
+                                .font(.system(size: 12, weight: .medium))
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 10, weight: .semibold))
+                        }
+                        .foregroundStyle(theme.textSecondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(theme.hoverBackground, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .popover(isPresented: $isShowingMCPDropdown, arrowEdge: .top) {
+                        MCPServerDropdown(isPresented: $isShowingMCPDropdown)
                     }
 
                     Button {
