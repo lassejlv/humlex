@@ -16,7 +16,7 @@ let package = Package(
                 .product(name: "ClaudeCodeSDK", package: "ClaudeCodeSDK")
             ],
             path: ".",
-            exclude: ["run.sh", "build-dmg.sh", "Assets.xcassets", "README.md", ".github", "docs"],
+            exclude: ["run.sh", "build-dmg.sh", "Assets.xcassets", "README.md", ".github", "docs", "website"],
             resources: [
                 .process("assets")
             ],

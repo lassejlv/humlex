@@ -168,7 +168,7 @@ struct MessageRow: View {
 
                         Text(
                             isKnownTool
-                                ? (AgentToolName(rawValue: tc.name)?.displayName ?? tc.name)
+                                ? (toolDisplayName(tc.name) ?? tc.name)
                                 : tc.name
                         )
                         .font(.system(size: 12, weight: .medium, design: .monospaced))
@@ -270,7 +270,7 @@ struct MessageRow: View {
     }
 
     private var toolResultBlock: some View {
-        let isBuiltIn = message.toolName.map { AgentToolName(rawValue: $0) != nil } ?? false
+        let isBuiltIn = message.toolName.map { BuiltInToolRegistry.shared.hasTool(named: $0) } ?? false
         let isCommand = message.toolName == "run_command"
         let isFileRead = message.toolName == "read_file"
         let isSearch = message.toolName == "search_files"
@@ -310,7 +310,7 @@ struct MessageRow: View {
 
                     // Tool name
                     if isBuiltIn, let name = message.toolName,
-                        let displayName = AgentToolName(rawValue: name)?.displayName
+                        let displayName = toolDisplayName(name)
                     {
                         Text(displayName)
                             .font(.system(size: 12, weight: .medium))
@@ -499,6 +499,14 @@ struct MessageRow: View {
     private func toolResultIconColor(isError: Bool, isDenied: Bool, isBuiltIn: Bool) -> Color {
         if isDenied || isError { return Color.red.opacity(0.7) }
         return isBuiltIn ? .orange : theme.accent
+    }
+
+    /// Get the display name for a built-in tool from the registry.
+    private func toolDisplayName(_ toolName: String) -> String? {
+        // Convert snake_case to Title Case for display
+        let components = toolName.split(separator: "_")
+        guard !components.isEmpty else { return nil }
+        return components.map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
     }
 
     private var actionButtons: some View {
