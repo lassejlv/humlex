@@ -23,6 +23,21 @@ struct MessageRow: View {
         self.isStreaming = isStreaming
         self.isLastAssistant = isLastAssistant
         self.onRetry = onRetry
+        _toolResultExpanded = State(initialValue: Self.initialToolResultExpanded(for: message))
+    }
+
+    private static func initialToolResultExpanded(for message: ChatMessage) -> Bool {
+        guard message.role == .tool else { return false }
+        if message.text == "User denied this operation." { return true }
+        if message.text.hasPrefix("Error:") { return true }
+        if message.toolName == "run_command",
+           let firstLine = message.text.components(separatedBy: "\n").first,
+           firstLine.hasPrefix("Exit code:") {
+            let code = firstLine.replacingOccurrences(of: "Exit code:", with: "")
+                .trimmingCharacters(in: .whitespaces)
+            return code != "0"
+        }
+        return false
     }
 
     private var isUser: Bool {
@@ -64,10 +79,6 @@ struct MessageRow: View {
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     .frame(maxWidth: 580, alignment: .trailing)
             }
-
-            Text(message.timestamp, style: .time)
-                .font(.caption2)
-                .foregroundStyle(theme.textTertiary)
         }
     }
 
@@ -91,15 +102,13 @@ struct MessageRow: View {
                 }
             }
 
-            // Action bar: timestamp + copy + retry
-            HStack(spacing: 4) {
-                Text(message.timestamp, style: .time)
-                    .font(.caption2)
-                    .foregroundStyle(theme.textTertiary)
-
-                if !isStreaming {
+            // Action bar: copy + retry
+            let hasVisibleAssistantText = !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if !isStreaming && hasVisibleAssistantText {
+                HStack(spacing: 4) {
                     actionButtons
                         .opacity(showActions ? 1 : 0)
+                    Spacer(minLength: 0)
                 }
             }
         }
@@ -127,6 +136,16 @@ struct MessageRow: View {
     @ViewBuilder
     private func toolCallsView(_ toolCalls: [ChatMessage.ToolCall]) -> some View {
         VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "hammer")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(theme.textSecondary)
+                Text("Tool Calls")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(theme.textSecondary)
+            }
+            .padding(.bottom, 2)
+
             ForEach(toolCalls, id: \.id) { tc in
                 let isBuiltIn = AgentTools.isBuiltIn(serverName: tc.serverName)
                 let isCLIProvider = Self.isCLIProviderTool(serverName: tc.serverName)
@@ -139,6 +158,7 @@ struct MessageRow: View {
                         Image(systemName: isKnownTool ? toolCallIcon(tc.name) : "wrench.and.screwdriver")
                             .font(.system(size: 11))
                             .foregroundStyle(isBuiltIn ? .orange : (isCLIProvider ? .purple : theme.accent))
+
                         Text(isKnownTool ? (AgentToolName(rawValue: tc.name)?.displayName ?? tc.name) : tc.name)
                             .font(.system(size: 12, weight: .medium, design: .monospaced))
                             .foregroundStyle(theme.textPrimary)
@@ -162,6 +182,10 @@ struct MessageRow: View {
                                 .padding(.vertical, 2)
                                 .background(theme.chipBackground, in: Capsule())
                         }
+
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(theme.textTertiary)
                     }
                 }
                 .padding(.horizontal, 10)
@@ -244,6 +268,7 @@ struct MessageRow: View {
         let isError = message.text.hasPrefix("Error:")
         let lines = message.text.components(separatedBy: "\n")
         let lineCount = lines.count
+        let resultState = toolResultState(isError: isError, isDenied: isDenied, isCommand: isCommand, lines: lines)
 
         return VStack(alignment: .leading, spacing: 0) {
             // Collapsible header
@@ -281,15 +306,7 @@ struct MessageRow: View {
                     }
 
                     // Inline status/summary
-                    if isDenied {
-                        Text("denied")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(Color.red.opacity(0.7))
-                    } else if isError {
-                        Text("error")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(Color.red.opacity(0.7))
-                    } else if isCommand {
+                    if isCommand {
                         // Show exit code inline
                         if let exitLine = lines.first, exitLine.hasPrefix("Exit code:") {
                             let code = exitLine.replacingOccurrences(of: "Exit code: ", with: "").trimmingCharacters(in: .whitespaces)
@@ -309,6 +326,26 @@ struct MessageRow: View {
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
+
+                    Text(toolResultStateLabel(resultState))
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(toolResultStateColor(resultState))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(toolResultStateColor(resultState).opacity(0.12), in: Capsule())
+
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(message.text, forType: .string)
+                        toast.show(.success("Tool result copied"))
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(theme.textTertiary)
+                            .frame(width: 18, height: 18)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Copy tool result")
 
                     Spacer()
                 }
@@ -331,7 +368,7 @@ struct MessageRow: View {
                         // Terminal-styled block
                         Text(message.text)
                             .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(Color.green.opacity(0.85))
+                            .foregroundStyle(resultState == .error ? Color.red.opacity(0.85) : Color.green.opacity(0.85))
                             .textSelection(.enabled)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 8)
@@ -373,13 +410,47 @@ struct MessageRow: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(theme.codeBackground.opacity(0.3))
+                .fill(theme.codeBackground.opacity(0.35))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(theme.codeBorder.opacity(0.5), lineWidth: 1)
         )
         .frame(maxWidth: 760, alignment: .leading)
+    }
+
+    private enum ToolResultState {
+        case success
+        case warning
+        case error
+    }
+
+    private func toolResultState(isError: Bool, isDenied: Bool, isCommand: Bool, lines: [String]) -> ToolResultState {
+        if isDenied || isError { return .error }
+        if isCommand,
+           let exitLine = lines.first,
+           exitLine.hasPrefix("Exit code:") {
+            let code = exitLine.replacingOccurrences(of: "Exit code:", with: "")
+                .trimmingCharacters(in: .whitespaces)
+            return code == "0" ? .success : .error
+        }
+        return .success
+    }
+
+    private func toolResultStateLabel(_ state: ToolResultState) -> String {
+        switch state {
+        case .success: return "SUCCESS"
+        case .warning: return "WARNING"
+        case .error: return "ERROR"
+        }
+    }
+
+    private func toolResultStateColor(_ state: ToolResultState) -> Color {
+        switch state {
+        case .success: return .green
+        case .warning: return .orange
+        case .error: return .red
+        }
     }
 
     private func toolResultIcon(for toolName: String?, isError: Bool, isDenied: Bool) -> String {

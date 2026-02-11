@@ -51,10 +51,11 @@ struct KimiAdapter: LLMProviderAdapter {
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
 
         let toolDefs = kimiToolDefs(from: tools)
+        // let hasAssistantToolCallsInHistory = history.contains { !$0.toolCalls.isEmpty }
         let body = KimiChatStreamRequest(
             model: modelID.isEmpty ? defaultModelID : modelID,
             stream: true,
-            messages: history.map { apiMessage(from: $0) },
+            messages: history.map { kimiMessage(from: $0) },
             tools: toolDefs,
             maxOutputTokens: 32_768,
             reasoningEffort: "medium"
@@ -67,12 +68,28 @@ struct KimiAdapter: LLMProviderAdapter {
 }
 
 private struct KimiChatStreamRequest: Encodable {
+    struct Message: Encodable {
+        let role: String
+        let content: OpenAIChatStreamRequest.Message.MessageContent?
+        let toolCallID: String?
+        let toolCalls: [OpenAIChatStreamRequest.Message.ToolCallObject]?
+        let reasoningContent: String?
+
+        enum CodingKeys: String, CodingKey {
+            case role
+            case content
+            case toolCallID = "tool_call_id"
+            case toolCalls = "tool_calls"
+            case reasoningContent = "reasoning_content"
+        }
+    }
+
     let model: String
     let stream: Bool
-    let messages: [OpenAIChatStreamRequest.Message]
+    let messages: [Message]
     let tools: [[String: AnyCodable]]?
     let maxOutputTokens: Int
-    let reasoningEffort: String
+    let reasoningEffort: String?
 
     enum CodingKeys: String, CodingKey {
         case model
@@ -82,6 +99,19 @@ private struct KimiChatStreamRequest: Encodable {
         case maxOutputTokens = "max_tokens"
         case reasoningEffort = "reasoning_effort"
     }
+}
+
+private func kimiMessage(from message: LLMChatMessage) -> KimiChatStreamRequest.Message {
+    let base = apiMessage(from: message)
+    let isAssistantToolCallMessage = base.role == "assistant" && !(base.toolCalls?.isEmpty ?? true)
+
+    return KimiChatStreamRequest.Message(
+        role: base.role,
+        content: base.content,
+        toolCallID: base.toolCallID,
+        toolCalls: base.toolCalls,
+        reasoningContent: isAssistantToolCallMessage ? "tool-call reasoning context" : nil
+    )
 }
 
 private func kimiToolDefs(from mcpTools: [MCPTool]) -> [[String: AnyCodable]]? {
