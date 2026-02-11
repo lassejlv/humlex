@@ -7,19 +7,26 @@ struct ChatThread: Identifiable, Hashable, Codable {
     var agentEnabled: Bool
     var dangerousMode: Bool
     var workingDirectory: String?
+    
+    /// Token usage tracking for this thread
+    var tokenUsage: ThreadTokenUsage?
+    /// The model reference used for this thread (for context window tracking)
+    var modelReference: String?
 
-    init(id: UUID, title: String, messages: [ChatMessage], agentEnabled: Bool = false, dangerousMode: Bool = false, workingDirectory: String? = nil) {
+    init(id: UUID, title: String, messages: [ChatMessage], agentEnabled: Bool = false, dangerousMode: Bool = false, workingDirectory: String? = nil, tokenUsage: ThreadTokenUsage? = nil, modelReference: String? = nil) {
         self.id = id
         self.title = title
         self.messages = messages
         self.agentEnabled = agentEnabled
         self.dangerousMode = dangerousMode
         self.workingDirectory = workingDirectory
+        self.tokenUsage = tokenUsage
+        self.modelReference = modelReference
     }
 
     // Custom Codable to handle missing keys from old persisted data
     enum CodingKeys: String, CodingKey {
-        case id, title, messages, agentEnabled, dangerousMode, workingDirectory
+        case id, title, messages, agentEnabled, dangerousMode, workingDirectory, tokenUsage, modelReference
     }
 
     init(from decoder: Decoder) throws {
@@ -30,6 +37,22 @@ struct ChatThread: Identifiable, Hashable, Codable {
         agentEnabled = try container.decodeIfPresent(Bool.self, forKey: .agentEnabled) ?? false
         dangerousMode = try container.decodeIfPresent(Bool.self, forKey: .dangerousMode) ?? false
         workingDirectory = try container.decodeIfPresent(String.self, forKey: .workingDirectory)
+        tokenUsage = try container.decodeIfPresent(ThreadTokenUsage.self, forKey: .tokenUsage)
+        modelReference = try container.decodeIfPresent(String.self, forKey: .modelReference)
+    }
+    
+    /// Updates the token usage based on current messages and model
+    mutating func updateTokenUsage(modelContextWindow: Int) {
+        let estimatedTokens = TokenEstimator.estimateTotalTokens(for: messages)
+        if var usage = tokenUsage {
+            usage.updateEstimated(estimatedTokens)
+            tokenUsage = usage
+        } else {
+            tokenUsage = ThreadTokenUsage(
+                estimatedTokens: estimatedTokens,
+                contextWindow: modelContextWindow
+            )
+        }
     }
 }
 

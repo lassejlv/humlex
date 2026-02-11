@@ -31,8 +31,9 @@ struct MessageRow: View {
         if message.text == "User denied this operation." { return true }
         if message.text.hasPrefix("Error:") { return true }
         if message.toolName == "run_command",
-           let firstLine = message.text.components(separatedBy: "\n").first,
-           firstLine.hasPrefix("Exit code:") {
+            let firstLine = message.text.components(separatedBy: "\n").first,
+            firstLine.hasPrefix("Exit code:")
+        {
             let code = firstLine.replacingOccurrences(of: "Exit code:", with: "")
                 .trimmingCharacters(in: .whitespaces)
             return code != "0"
@@ -103,7 +104,9 @@ struct MessageRow: View {
             }
 
             // Action bar: copy + retry
-            let hasVisibleAssistantText = !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let hasVisibleAssistantText = !message.text.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty
             if !isStreaming && hasVisibleAssistantText {
                 HStack(spacing: 4) {
                     actionButtons
@@ -155,13 +158,21 @@ struct MessageRow: View {
                 VStack(alignment: .leading, spacing: 0) {
                     // Main chip row
                     HStack(spacing: 6) {
-                        Image(systemName: isKnownTool ? toolCallIcon(tc.name) : "wrench.and.screwdriver")
-                            .font(.system(size: 11))
-                            .foregroundStyle(isBuiltIn ? .orange : (isCLIProvider ? .purple : theme.accent))
+                        Image(
+                            systemName: isKnownTool
+                                ? toolCallIcon(tc.name) : "wrench.and.screwdriver"
+                        )
+                        .font(.system(size: 11))
+                        .foregroundStyle(
+                            isBuiltIn ? .orange : (isCLIProvider ? .purple : theme.accent))
 
-                        Text(isKnownTool ? (AgentToolName(rawValue: tc.name)?.displayName ?? tc.name) : tc.name)
-                            .font(.system(size: 12, weight: .medium, design: .monospaced))
-                            .foregroundStyle(theme.textPrimary)
+                        Text(
+                            isKnownTool
+                                ? (AgentToolName(rawValue: tc.name)?.displayName ?? tc.name)
+                                : tc.name
+                        )
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .foregroundStyle(theme.textPrimary)
 
                         // Inline argument summary
                         if let summary = toolCallArgSummary(tc.name, args: args) {
@@ -190,7 +201,9 @@ struct MessageRow: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(theme.codeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(
+                    theme.codeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .stroke(theme.codeBorder, lineWidth: 1)
@@ -219,7 +232,7 @@ struct MessageRow: View {
 
     private func parseToolArgs(_ json: String) -> [String: Any] {
         guard let data = json.data(using: .utf8),
-              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return [:] }
         return dict
     }
@@ -268,7 +281,8 @@ struct MessageRow: View {
         let isError = message.text.hasPrefix("Error:")
         let lines = message.text.components(separatedBy: "\n")
         let lineCount = lines.count
-        let resultState = toolResultState(isError: isError, isDenied: isDenied, isCommand: isCommand, lines: lines)
+        let resultState = toolResultState(
+            isError: isError, isDenied: isDenied, isCommand: isCommand, lines: lines)
 
         return VStack(alignment: .leading, spacing: 0) {
             // Collapsible header
@@ -285,12 +299,19 @@ struct MessageRow: View {
                         .frame(width: 12)
 
                     // Tool icon
-                    Image(systemName: toolResultIcon(for: message.toolName, isError: isError, isDenied: isDenied))
-                        .font(.system(size: 11))
-                        .foregroundStyle(toolResultIconColor(isError: isError, isDenied: isDenied, isBuiltIn: isBuiltIn))
+                    Image(
+                        systemName: toolResultIcon(
+                            for: message.toolName, isError: isError, isDenied: isDenied)
+                    )
+                    .font(.system(size: 11))
+                    .foregroundStyle(
+                        toolResultIconColor(
+                            isError: isError, isDenied: isDenied, isBuiltIn: isBuiltIn))
 
                     // Tool name
-                    if isBuiltIn, let name = message.toolName, let displayName = AgentToolName(rawValue: name)?.displayName {
+                    if isBuiltIn, let name = message.toolName,
+                        let displayName = AgentToolName(rawValue: name)?.displayName
+                    {
                         Text(displayName)
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(theme.textSecondary)
@@ -309,10 +330,12 @@ struct MessageRow: View {
                     if isCommand {
                         // Show exit code inline
                         if let exitLine = lines.first, exitLine.hasPrefix("Exit code:") {
-                            let code = exitLine.replacingOccurrences(of: "Exit code: ", with: "").trimmingCharacters(in: .whitespaces)
+                            let code = exitLine.replacingOccurrences(of: "Exit code: ", with: "")
+                                .trimmingCharacters(in: .whitespaces)
                             Text("exit \(code)")
                                 .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(code == "0" ? Color.green.opacity(0.7) : Color.red.opacity(0.7))
+                                .foregroundStyle(
+                                    code == "0" ? Color.green.opacity(0.7) : Color.red.opacity(0.7))
                         }
                     } else if isFileRead || isSearch || isListDir {
                         Text("\(lineCount) lines")
@@ -368,7 +391,10 @@ struct MessageRow: View {
                         // Terminal-styled block
                         Text(message.text)
                             .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(resultState == .error ? Color.red.opacity(0.85) : Color.green.opacity(0.85))
+                            .foregroundStyle(
+                                resultState == .error
+                                    ? Color.red.opacity(0.85) : Color.green.opacity(0.85)
+                            )
                             .textSelection(.enabled)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 8)
@@ -425,11 +451,14 @@ struct MessageRow: View {
         case error
     }
 
-    private func toolResultState(isError: Bool, isDenied: Bool, isCommand: Bool, lines: [String]) -> ToolResultState {
+    private func toolResultState(isError: Bool, isDenied: Bool, isCommand: Bool, lines: [String])
+        -> ToolResultState
+    {
         if isDenied || isError { return .error }
         if isCommand,
-           let exitLine = lines.first,
-           exitLine.hasPrefix("Exit code:") {
+            let exitLine = lines.first,
+            exitLine.hasPrefix("Exit code:")
+        {
             let code = exitLine.replacingOccurrences(of: "Exit code:", with: "")
                 .trimmingCharacters(in: .whitespaces)
             return code == "0" ? .success : .error
@@ -542,34 +571,90 @@ struct MessageRow: View {
 struct SkeletonView: View {
     @Environment(\.appTheme) private var theme
     @State private var shimmerOffset: CGFloat = -1
+    @State private var spinnerRotation: Double = 0
+    @State private var dotAnimationIndex: Int = 0
+    @State private var dotTimer: Timer?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            skeletonLine(width: 280)
-            skeletonLine(width: 220)
-            skeletonLine(width: 250)
+        VStack(alignment: .leading, spacing: 16) {
+            // Loading Spinner Row
+            HStack(spacing: 12) {
+                // Animated Spinner
+                Circle()
+                    .stroke(
+                        AngularGradient(
+                            colors: [
+                                theme.accent.opacity(0.0),
+                                theme.accent.opacity(0.3),
+                                theme.accent.opacity(0.8),
+                                theme.accent.opacity(1.0),
+                            ],
+                            center: .center,
+                            startAngle: .degrees(0),
+                            endAngle: .degrees(360)
+                        ),
+                        lineWidth: 2.5
+                    )
+                    .frame(width: 15, height: 15)
+                    .rotationEffect(.degrees(spinnerRotation))
+
+                Text("Thinking")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(theme.textSecondary)
+
+                Spacer()
+            }
+            .onAppear {
+                // Spinner rotation - faster spin
+                withAnimation(
+                    .linear(duration: 0.7)
+                        .repeatForever(autoreverses: false)
+                ) {
+                    spinnerRotation = 360
+                }
+
+                // Dot animation timer
+                dotTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { _ in
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        dotAnimationIndex = (dotAnimationIndex + 1) % 3
+                    }
+                }
+            }
+            .onDisappear {
+                dotTimer?.invalidate()
+                dotTimer = nil
+            }
+
+            // Skeleton Lines with staggered shimmer
+            VStack(alignment: .leading, spacing: 10) {
+                skeletonLine(width: 320, delay: 0.0)
+                skeletonLine(width: 260, delay: 0.15)
+                skeletonLine(width: 290, delay: 0.30)
+            }
         }
         .onAppear {
             withAnimation(
-                .easeInOut(duration: 1.2)
-                .repeatForever(autoreverses: false)
+                .easeInOut(duration: 1.5)
+                    .repeatForever(autoreverses: false)
             ) {
                 shimmerOffset = 2
             }
         }
     }
 
-    private func skeletonLine(width: CGFloat) -> some View {
-        RoundedRectangle(cornerRadius: 4, style: .continuous)
-            .fill(theme.textTertiary.opacity(0.15))
-            .frame(width: width, height: 12)
+    private func skeletonLine(width: CGFloat, delay: Double) -> some View {
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(theme.textTertiary.opacity(0.12))
+            .frame(width: width, height: 11)
             .overlay(
                 GeometryReader { geo in
-                    let shimmerWidth = geo.size.width * 0.6
+                    let shimmerWidth = geo.size.width * 0.5
                     LinearGradient(
                         colors: [
                             .clear,
-                            theme.textSecondary.opacity(0.12),
+                            theme.textSecondary.opacity(0.15),
+                            theme.accent.opacity(0.08),
+                            theme.textSecondary.opacity(0.15),
                             .clear,
                         ],
                         startPoint: .leading,
@@ -577,8 +662,14 @@ struct SkeletonView: View {
                     )
                     .frame(width: shimmerWidth)
                     .offset(x: shimmerOffset * geo.size.width - shimmerWidth / 2)
+                    .animation(
+                        .easeInOut(duration: 1.5)
+                            .repeatForever(autoreverses: false)
+                            .delay(delay),
+                        value: shimmerOffset
+                    )
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             )
     }
 }

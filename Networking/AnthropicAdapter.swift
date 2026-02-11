@@ -149,6 +149,8 @@ private func streamAnthropicSSE(
     // Track tool use blocks being assembled
     var currentToolUseIndex = 0
     var toolUseAccumulators: [Int: (id: String, name: String, arguments: String)] = [:]
+    // Track usage from the final message (if present)
+    var finalUsage: TokenUsage?
 
     for try await line in bytes.lines {
         try Task.checkCancellation()
@@ -187,6 +189,16 @@ private func streamAnthropicSSE(
             case "content_block_stop":
                 currentToolUseIndex += 1
 
+            case "message_stop":
+                // Message complete - check for usage if available
+                if let usage = event.usage {
+                    finalUsage = TokenUsage(
+                        inputTokens: usage.inputTokens,
+                        outputTokens: usage.outputTokens,
+                        totalTokens: usage.inputTokens + usage.outputTokens
+                    )
+                }
+
             default:
                 break
             }
@@ -207,7 +219,7 @@ private func streamAnthropicSSE(
     }
 
     await onEvent(.done)
-    return StreamResult(text: fullText, toolCalls: toolCalls)
+    return StreamResult(text: fullText, toolCalls: toolCalls, usage: finalUsage)
 }
 
 private func anthropicToolDefs(from mcpTools: [MCPTool]) -> [AnthropicToolDefinition]? {
@@ -335,6 +347,7 @@ struct AnthropicStreamEvent: Decodable {
     let type: String
     let delta: Delta?
     let contentBlock: ContentBlock?
+    let usage: Usage?
 
     struct Delta: Decodable {
         let type: String?
@@ -352,10 +365,21 @@ struct AnthropicStreamEvent: Decodable {
         let id: String?
         let name: String?
     }
+    
+    struct Usage: Decodable {
+        let inputTokens: Int
+        let outputTokens: Int
+        
+        enum CodingKeys: String, CodingKey {
+            case inputTokens = "input_tokens"
+            case outputTokens = "output_tokens"
+        }
+    }
 
     enum CodingKeys: String, CodingKey {
         case type, delta
         case contentBlock = "content_block"
+        case usage
     }
 }
 

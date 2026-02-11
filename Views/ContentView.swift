@@ -11,15 +11,23 @@ import SwiftUI
 struct ContentView: View {
     @AppStorage("selected_model_reference") private var selectedModelReference: String = ""
     @AppStorage("selected_thread_id") private var selectedThreadIDRaw: String = ""
-    @AppStorage("codex_sandbox_mode") private var codexSandboxModeRaw: String = CodexSandboxMode.readOnly.rawValue
+    @AppStorage("codex_sandbox_mode") private var codexSandboxModeRaw: String = CodexSandboxMode
+        .readOnly.rawValue
     @AppStorage("experimental_claude_code_enabled") private var isClaudeCodeEnabled = false
     @AppStorage("experimental_codex_enabled") private var isCodexEnabled = false
+    @AppStorage("auto_scroll_enabled") private var isAutoScrollEnabled = true
 
     @State private var models: [LLMModel] = []
     @State private var isLoadingModels = false
     @State private var isSending = false
     @State private var statusMessage: String?
     @State private var searchText: String = ""
+
+    // MARK: - Search Debouncing
+    /// Debounced search text for filtering (updates 200ms after user stops typing)
+    @State private var debouncedSearchText: String = ""
+    private let searchDebounceInterval: TimeInterval = 0.2
+    @State private var searchDebounceWorkItem: DispatchWorkItem?
 
     @State private var threads: [ChatThread] = [
         ChatThread(
@@ -43,6 +51,31 @@ struct ContentView: View {
     @State private var streamingMessageID: UUID?
     @State private var persistWorkItem: DispatchWorkItem?
     @State private var streamingTask: Task<Void, Never>?
+
+    // MARK: - Streaming Batching
+    /// Buffers streaming text deltas to batch UI updates (reduces per-token lag)
+    @State private var streamBuffer: String = ""
+    @State private var streamBufferMessageID: UUID?
+    @State private var streamBufferThreadID: UUID?
+    @State private var streamFlushWorkItem: DispatchWorkItem?
+
+    // MARK: - Scroll Throttling
+    /// Tracks last scroll time to throttle scrollTo calls to ~30fps
+    @State private var lastScrollTime: Date = Date.distantPast
+    private let scrollThrottleInterval: TimeInterval = 0.033  // ~30fps
+
+    // MARK: - Smart Scroll Position Tracking
+    /// Tracks whether user is scrolled up (reading older messages)
+    @State private var isUserScrolledUp: Bool = false
+    /// Shows if new messages arrived while user was scrolled up
+    @State private var hasUnreadMessages: Bool = false
+    /// The scroll offset to determine if user is near bottom
+    @State private var scrollOffset: CGFloat = 0
+    /// Threshold for considering user "at bottom" (in points)
+    private let scrollBottomThreshold: CGFloat = 200
+    /// Timestamp updated when streaming text changes to trigger scroll
+    @State private var lastStreamUpdate: Date = Date.distantPast
+
     @State private var threadToDelete: ChatThread?
     @State private var isCommandPaletteOpen: Bool = false
     @State private var agentToolExecutor = AgentToolExecutor()
@@ -80,19 +113,22 @@ struct ContentView: View {
     }
 
     private var canSend: Bool {
-        (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty)
+        (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !pendingAttachments.isEmpty)
             && selectedThreadIndex != nil
             && selectedModel != nil
             && !isSending
     }
 
     private var filteredThreads: [ChatThread] {
-        if searchText.isEmpty {
+        if debouncedSearchText.isEmpty {
             return threads
         }
         return threads.filter { thread in
-            thread.title.localizedCaseInsensitiveContains(searchText) ||
-            thread.messages.contains { $0.text.localizedCaseInsensitiveContains(searchText) }
+            thread.title.localizedCaseInsensitiveContains(debouncedSearchText)
+                || thread.messages.contains {
+                    $0.text.localizedCaseInsensitiveContains(debouncedSearchText)
+                }
         }
     }
 
@@ -103,9 +139,33 @@ struct ContentView: View {
 
     /// Undo history for the currently selected thread.
     private var undoHistory: [UndoEntry] {
-        get {
-            guard let id = selectedThreadID else { return [] }
-            return undoHistoryByThread[id] ?? []
+        guard let id = selectedThreadID else { return [] }
+        return undoHistoryByThread[id] ?? []
+    }
+
+    /// Context token usage for the currently selected thread.
+    private var currentContextUsage: ThreadTokenUsage? {
+        guard let idx = selectedThreadIndex else { return nil }
+        let thread = threads[idx]
+
+        // Get the context window from the selected model
+        let contextWindow = selectedModel?.contextWindow ?? 128_000
+
+        // Calculate estimated tokens for current messages
+        let estimatedTokens = TokenEstimator.estimateTotalTokens(for: thread.messages)
+
+        // Use existing usage data if available, otherwise create new
+        if var usage = thread.tokenUsage {
+            // Update with current estimate if no actual usage yet
+            if usage.actualTokens == nil {
+                usage.updateEstimated(estimatedTokens)
+            }
+            return usage
+        } else {
+            return ThreadTokenUsage(
+                estimatedTokens: estimatedTokens,
+                contextWindow: contextWindow
+            )
         }
     }
 
@@ -158,12 +218,16 @@ struct ContentView: View {
     private func buildMainView() -> AnyView {
         let base = splitView
 
-        let dialogs = base
+        let dialogs =
+            base
             .sheet(isPresented: $isShowingSettings) { settingsSheet }
-            .alert("Delete Chat", isPresented: Binding(
-                get: { threadToDelete != nil },
-                set: { if !$0 { threadToDelete = nil } }
-            )) {
+            .alert(
+                "Delete Chat",
+                isPresented: Binding(
+                    get: { threadToDelete != nil },
+                    set: { if !$0 { threadToDelete = nil } }
+                )
+            ) {
                 Button("Cancel", role: .cancel) {
                     threadToDelete = nil
                 }
@@ -179,7 +243,9 @@ struct ContentView: View {
                     threadToDelete = nil
                 }
             } message: {
-                Text("Are you sure you want to delete \"\(threadToDelete?.title ?? "this chat")\"? This cannot be undone.")
+                Text(
+                    "Are you sure you want to delete \"\(threadToDelete?.title ?? "this chat")\"? This cannot be undone."
+                )
             }
             .alert("Delete All Chats", isPresented: $isShowingDeleteAllChatsAlert) {
                 Button("Cancel", role: .cancel) {}
@@ -190,7 +256,8 @@ struct ContentView: View {
                 Text("This removes all conversations and cannot be undone.")
             }
 
-        let lifecycle = dialogs
+        let lifecycle =
+            dialogs
             .onAppear {
                 if !didLoadAPIKeys {
                     loadAPIKeysFromKeychain()
@@ -200,7 +267,8 @@ struct ContentView: View {
                 loadChatsFromDisk()
 
                 if let persistedID = UUID(uuidString: selectedThreadIDRaw),
-                   threads.contains(where: { $0.id == persistedID }) {
+                    threads.contains(where: { $0.id == persistedID })
+                {
                     selectedThreadID = persistedID
                 }
 
@@ -245,7 +313,8 @@ struct ContentView: View {
                 schedulePersist(newValue)
             }
 
-        let decorated = lifecycle
+        let decorated =
+            lifecycle
             .overlay {
                 CommandPaletteOverlay(
                     isPresented: $isCommandPaletteOpen,
@@ -269,7 +338,8 @@ struct ContentView: View {
                 allowsMultipleSelection: false
             ) { result in
                 if case .success(let urls) = result, let url = urls.first,
-                   let idx = selectedThreadIndex {
+                    let idx = selectedThreadIndex
+                {
                     threads[idx].workingDirectory = url.path
                     threads[idx].agentEnabled = true
                     let abbreviated = abbreviatePathForToast(url.path)
@@ -396,6 +466,16 @@ struct ContentView: View {
         }
         .background(theme.sidebarBackground)
         .searchable(text: $searchText, placement: .sidebar, prompt: "Search")
+        .onChange(of: searchText) { _, newValue in
+            // Debounce search input by 200ms
+            searchDebounceWorkItem?.cancel()
+            let workItem = DispatchWorkItem { [self] in
+                debouncedSearchText = newValue
+            }
+            searchDebounceWorkItem = workItem
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + searchDebounceInterval, execute: workItem)
+        }
         .navigationSplitViewColumnWidth(min: 220, ideal: 260)
     }
 
@@ -425,41 +505,89 @@ struct ContentView: View {
                 Spacer()
             } else {
                 ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 16) {
-                            ForEach(currentMessages) { message in
-                                let isLastAssistant = message.role == .assistant
-                                    && message.id == currentMessages.last(where: { $0.role == .assistant })?.id
-                                MessageRow(
-                                    message: message,
-                                    isStreaming: message.id == streamingMessageID,
-                                    isLastAssistant: isLastAssistant && !isSending
-                                ) {
-                                    retryLastResponse()
+                    ZStack(alignment: .bottom) {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 16) {
+                                ForEach(currentMessages) { message in
+                                    messageRow(for: message)
+                                        .id(message.id)
                                 }
-                                .id(message.id)
+                            }
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 20)
+                            // Track scroll position for smart auto-scroll
+                            .background(
+                                GeometryReader { geometry in
+                                    Color.clear
+                                        .preference(
+                                            key: ScrollOffsetPreferenceKey.self,
+                                            value: geometry.frame(in: .named("scroll")).minY)
+                                }
+                            )
+                        }
+                        .coordinateSpace(name: "scroll")
+                        .onPreferenceChange(ScrollOffsetPreferenceKey.self) { value in
+                            scrollOffset = value
+                            // Check if user is near bottom (within threshold)
+                            let isAtBottom = scrollOffset > -scrollBottomThreshold
+                            if isUserScrolledUp && isAtBottom {
+                                // User scrolled back to bottom
+                                isUserScrolledUp = false
+                                hasUnreadMessages = false
+                            } else if !isUserScrolledUp && !isAtBottom {
+                                // User scrolled up away from bottom
+                                isUserScrolledUp = true
                             }
                         }
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 20)
-                    }
-                    .onChange(of: currentMessages.count) { _, _ in
-                        if let lastID = currentMessages.last?.id {
-                            withAnimation {
-                                proxy.scrollTo(lastID, anchor: .bottom)
+                        // Throttled auto-scroll: combines all triggers and limits to ~30fps
+                        .onChange(of: currentMessages.count) { _, _ in
+                            throttledScrollToLast(proxy: proxy)
+                        }
+                        .onChange(of: currentMessages.last?.toolCalls?.count ?? 0) { _, _ in
+                            throttledScrollToLast(proxy: proxy)
+                        }
+                        // Trigger scroll when streaming text updates
+                        .onChange(of: lastStreamUpdate) { _, _ in
+                            throttledScrollToLast(proxy: proxy)
+                        }
+                        // Overlay for "New Messages" button
+                        .overlay(alignment: .bottom) {
+                            if isUserScrolledUp && hasUnreadMessages {
+                                Button {
+                                    withAnimation(.easeInOut(duration: 0.3)) {
+                                        if let lastID = currentMessages.last?.id {
+                                            proxy.scrollTo(lastID, anchor: .bottom)
+                                        }
+                                        isUserScrolledUp = false
+                                        hasUnreadMessages = false
+                                    }
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "arrow.down")
+                                            .font(.system(size: 11, weight: .semibold))
+                                        Text("New Messages")
+                                            .font(.system(size: 12, weight: .medium))
+                                    }
+                                    .foregroundStyle(theme.accent)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 8)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                            .fill(theme.background)
+                                            .shadow(
+                                                color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                            .stroke(theme.accent.opacity(0.3), lineWidth: 1)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .padding(.bottom, 16)
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
                             }
                         }
-                    }
-                    .onChange(of: currentMessages.last?.text ?? "") { _, _ in
-                        if let lastID = currentMessages.last?.id {
-                            proxy.scrollTo(lastID, anchor: .bottom)
-                        }
-                    }
-                    .onChange(of: currentMessages.last?.toolCalls?.count ?? 0) { _, _ in
-                        if let lastID = currentMessages.last?.id {
-                            proxy.scrollTo(lastID, anchor: .bottom)
-                        }
-                    }
+                    }  // Close ZStack
                 }
             }
 
@@ -473,7 +601,8 @@ struct ContentView: View {
                 workingDirectory: workingDirectoryBinding,
                 undoCount: undoHistory.filter { !$0.isReverted }.count,
                 isSending: isSending,
-                canSend: canSend
+                canSend: canSend,
+                contextUsage: currentContextUsage
             ) {
                 startSend()
             } onStop: {
@@ -491,193 +620,221 @@ struct ContentView: View {
         var actions: [CommandAction] = []
 
         // New Chat
-        actions.append(CommandAction(
-            title: "New Chat",
-            subtitle: "Start a fresh conversation",
-            icon: "square.and.pencil",
-            shortcut: "N"
-        ) {
-            createThread()
-            toastManager.show(.success("New chat created", icon: "square.and.pencil"))
-        })
+        actions.append(
+            CommandAction(
+                title: "New Chat",
+                subtitle: "Start a fresh conversation",
+                icon: "square.and.pencil",
+                shortcut: "N"
+            ) {
+                createThread()
+                toastManager.show(.success("New chat created", icon: "square.and.pencil"))
+            })
 
         // Current chat actions (if a thread is selected)
         if let threadID = selectedThreadID,
-           let thread = threads.first(where: { $0.id == threadID }) {
-            actions.append(CommandAction(
-                title: "Export Current Chat",
-                subtitle: "Save \"\(thread.title)\" as Markdown",
-                icon: "doc.text",
-                shortcut: "E"
-            ) {
-                exportThreadToMarkdown(thread)
-            })
+            let thread = threads.first(where: { $0.id == threadID })
+        {
+            actions.append(
+                CommandAction(
+                    title: "Export Current Chat",
+                    subtitle: "Save \"\(thread.title)\" as Markdown",
+                    icon: "doc.text",
+                    shortcut: "E"
+                ) {
+                    exportThreadToMarkdown(thread)
+                })
 
-            actions.append(CommandAction(
-                title: "Delete Current Chat",
-                subtitle: "Remove \"\(thread.title)\"",
-                icon: "trash",
-                shortcut: "D"
-            ) {
-                threadToDelete = thread
-            })
+            actions.append(
+                CommandAction(
+                    title: "Delete Current Chat",
+                    subtitle: "Remove \"\(thread.title)\"",
+                    icon: "trash",
+                    shortcut: "D"
+                ) {
+                    threadToDelete = thread
+                })
         }
 
         // Settings
-        actions.append(CommandAction(
-            title: "Open Settings",
-            subtitle: "Configure API keys and theme",
-            icon: "gearshape",
-            shortcut: ","
-        ) {
-            isShowingSettings = true
-            toastManager.show(.info("Settings opened", icon: "gearshape"))
-        })
+        actions.append(
+            CommandAction(
+                title: "Open Settings",
+                subtitle: "Configure API keys and theme",
+                icon: "gearshape",
+                shortcut: ","
+            ) {
+                isShowingSettings = true
+                toastManager.show(.info("Settings opened", icon: "gearshape"))
+            })
 
         // Model picker
-        actions.append(CommandAction(
-            title: "Change Model",
-            subtitle: selectedModelLabel,
-            icon: "cpu",
-            shortcut: "M"
-        ) {
-            NotificationCenter.default.post(name: .openModelPickerRequested, object: nil)
-            toastManager.show(.info("Model picker opened", icon: "cpu"))
-        })
+        actions.append(
+            CommandAction(
+                title: "Change Model",
+                subtitle: selectedModelLabel,
+                icon: "cpu",
+                shortcut: "M"
+            ) {
+                NotificationCenter.default.post(name: .openModelPickerRequested, object: nil)
+                toastManager.show(.info("Model picker opened", icon: "cpu"))
+            })
 
         // Fetch models
-        actions.append(CommandAction(
-            title: "Fetch Models",
-            subtitle: "Refresh available models from providers",
-            icon: "arrow.clockwise",
-            shortcut: "R"
-        ) {
-            toastManager.show(.info("Fetching models...", icon: "arrow.clockwise"))
-            Task { await fetchModels() }
-        })
+        actions.append(
+            CommandAction(
+                title: "Fetch Models",
+                subtitle: "Refresh available models from providers",
+                icon: "arrow.clockwise",
+                shortcut: "R"
+            ) {
+                toastManager.show(.info("Fetching models...", icon: "arrow.clockwise"))
+                Task { await fetchModels() }
+            })
 
         // Check for Updates
-        actions.append(CommandAction(
-            title: "Check for Updates",
-            subtitle: "Check for a new version of Humlex",
-            icon: "arrow.triangle.2.circlepath",
-            shortcut: "U"
-        ) {
-            appUpdater.checkForUpdates()
-        })
+        actions.append(
+            CommandAction(
+                title: "Check for Updates",
+                subtitle: "Check for a new version of Humlex",
+                icon: "arrow.triangle.2.circlepath",
+                shortcut: "U"
+            ) {
+                appUpdater.checkForUpdates()
+            })
 
         // Theme picker - shows theme options when searched
-        actions.append(CommandAction(
-            title: "Theme: System",
-            subtitle: themeManager.current.id == "system" ? "Currently active" : "Use macOS appearance",
-            icon: "circle.lefthalf.filled"
-        ) {
-            themeManager.select(.system)
-            toastManager.show(.success("Switched to System theme", icon: "circle.lefthalf.filled"))
-        })
+        actions.append(
+            CommandAction(
+                title: "Theme: System",
+                subtitle: themeManager.current.id == "system"
+                    ? "Currently active" : "Use macOS appearance",
+                icon: "circle.lefthalf.filled"
+            ) {
+                themeManager.select(.system)
+                toastManager.show(
+                    .success("Switched to System theme", icon: "circle.lefthalf.filled"))
+            })
 
-        actions.append(CommandAction(
-            title: "Theme: Tokyo Night",
-            subtitle: themeManager.current.id == "tokyo-night" ? "Currently active" : "Dark theme inspired by Tokyo",
-            icon: "moon.stars"
-        ) {
-            themeManager.select(.tokyoNight)
-            toastManager.show(.success("Switched to Tokyo Night", icon: "moon.stars"))
-        })
+        actions.append(
+            CommandAction(
+                title: "Theme: Tokyo Night",
+                subtitle: themeManager.current.id == "tokyo-night"
+                    ? "Currently active" : "Dark theme inspired by Tokyo",
+                icon: "moon.stars"
+            ) {
+                themeManager.select(.tokyoNight)
+                toastManager.show(.success("Switched to Tokyo Night", icon: "moon.stars"))
+            })
 
-        actions.append(CommandAction(
-            title: "Theme: Tokyo Night Storm",
-            subtitle: themeManager.current.id == "tokyo-night-storm" ? "Currently active" : "Lighter Tokyo Night variant",
-            icon: "cloud.moon"
-        ) {
-            themeManager.select(.tokyoNightStorm)
-            toastManager.show(.success("Switched to Tokyo Night Storm", icon: "cloud.moon"))
-        })
+        actions.append(
+            CommandAction(
+                title: "Theme: Tokyo Night Storm",
+                subtitle: themeManager.current.id == "tokyo-night-storm"
+                    ? "Currently active" : "Lighter Tokyo Night variant",
+                icon: "cloud.moon"
+            ) {
+                themeManager.select(.tokyoNightStorm)
+                toastManager.show(.success("Switched to Tokyo Night Storm", icon: "cloud.moon"))
+            })
 
-        actions.append(CommandAction(
-            title: "Theme: Catppuccin Mocha",
-            subtitle: themeManager.current.id == "catppuccin-mocha" ? "Currently active" : "Warm pastel dark theme",
-            icon: "cup.and.saucer"
-        ) {
-            themeManager.select(.catppuccinMocha)
-            toastManager.show(.success("Switched to Catppuccin Mocha", icon: "cup.and.saucer"))
-        })
+        actions.append(
+            CommandAction(
+                title: "Theme: Catppuccin Mocha",
+                subtitle: themeManager.current.id == "catppuccin-mocha"
+                    ? "Currently active" : "Warm pastel dark theme",
+                icon: "cup.and.saucer"
+            ) {
+                themeManager.select(.catppuccinMocha)
+                toastManager.show(.success("Switched to Catppuccin Mocha", icon: "cup.and.saucer"))
+            })
 
-        actions.append(CommandAction(
-            title: "Theme: GitHub Dark",
-            subtitle: themeManager.current.id == "github-dark" ? "Currently active" : "Clean GitHub-style dark theme",
-            icon: "chevron.left.forwardslash.chevron.right"
-        ) {
-            themeManager.select(.githubDark)
-            toastManager.show(.success("Switched to GitHub Dark", icon: "chevron.left.forwardslash.chevron.right"))
-        })
+        actions.append(
+            CommandAction(
+                title: "Theme: GitHub Dark",
+                subtitle: themeManager.current.id == "github-dark"
+                    ? "Currently active" : "Clean GitHub-style dark theme",
+                icon: "chevron.left.forwardslash.chevron.right"
+            ) {
+                themeManager.select(.githubDark)
+                toastManager.show(
+                    .success(
+                        "Switched to GitHub Dark", icon: "chevron.left.forwardslash.chevron.right"))
+            })
 
         // Stop streaming
         if streamingTask != nil {
-            actions.insert(CommandAction(
-                title: "Stop Generation",
-                subtitle: "Cancel the current response",
-                icon: "stop.circle",
-                shortcut: "."
-            ) {
-                stopStreaming()
-                toastManager.show(.info("Generation stopped", icon: "stop.circle"))
-            }, at: 0)
+            actions.insert(
+                CommandAction(
+                    title: "Stop Generation",
+                    subtitle: "Cancel the current response",
+                    icon: "stop.circle",
+                    shortcut: "."
+                ) {
+                    stopStreaming()
+                    toastManager.show(.info("Generation stopped", icon: "stop.circle"))
+                }, at: 0)
         }
 
         // Copy last response
         if let threadID = selectedThreadID,
-           let thread = threads.first(where: { $0.id == threadID }),
-           let lastAssistant = thread.messages.last(where: { $0.role == .assistant }) {
-            actions.append(CommandAction(
-                title: "Copy Last Response",
-                subtitle: "Copy assistant's last message",
-                icon: "doc.on.doc"
-            ) {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(lastAssistant.text, forType: .string)
-                toastManager.show(.success("Copied to clipboard", icon: "doc.on.doc"))
-            })
+            let thread = threads.first(where: { $0.id == threadID }),
+            let lastAssistant = thread.messages.last(where: { $0.role == .assistant })
+        {
+            actions.append(
+                CommandAction(
+                    title: "Copy Last Response",
+                    subtitle: "Copy assistant's last message",
+                    icon: "doc.on.doc"
+                ) {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(lastAssistant.text, forType: .string)
+                    toastManager.show(.success("Copied to clipboard", icon: "doc.on.doc"))
+                })
         }
 
         // Clear all chats
-        actions.append(CommandAction(
-            title: "Clear All Chats",
-            subtitle: "Remove all conversations",
-            icon: "trash.fill"
-        ) {
-            clearAllChats(showToast: true)
-        })
+        actions.append(
+            CommandAction(
+                title: "Clear All Chats",
+                subtitle: "Remove all conversations",
+                icon: "trash.fill"
+            ) {
+                clearAllChats(showToast: true)
+            })
 
         // Agent mode toggle
         if let threadID = selectedThreadID,
-           let thread = threads.first(where: { $0.id == threadID }) {
+            let thread = threads.first(where: { $0.id == threadID })
+        {
             if thread.agentEnabled {
-                actions.append(CommandAction(
-                    title: "Disable Agent Mode",
-                    subtitle: "Turn off built-in coding tools",
-                    icon: "terminal"
-                ) {
-                    if let idx = threads.firstIndex(where: { $0.id == threadID }) {
-                        threads[idx].agentEnabled = false
-                        toastManager.show(.info("Agent mode disabled", icon: "terminal"))
-                    }
-                })
-            } else {
-                actions.append(CommandAction(
-                    title: "Enable Agent Mode",
-                    subtitle: "Type /agent <path> or pick a folder",
-                    icon: "terminal"
-                ) {
-                    if let idx = threads.firstIndex(where: { $0.id == threadID }) {
-                        if threads[idx].workingDirectory != nil {
-                            threads[idx].agentEnabled = true
-                            toastManager.show(.success("Agent mode ON", icon: "terminal"))
-                        } else {
-                            isShowingAgentDirectoryPicker = true
+                actions.append(
+                    CommandAction(
+                        title: "Disable Agent Mode",
+                        subtitle: "Turn off built-in coding tools",
+                        icon: "terminal"
+                    ) {
+                        if let idx = threads.firstIndex(where: { $0.id == threadID }) {
+                            threads[idx].agentEnabled = false
+                            toastManager.show(.info("Agent mode disabled", icon: "terminal"))
                         }
-                    }
-                })
+                    })
+            } else {
+                actions.append(
+                    CommandAction(
+                        title: "Enable Agent Mode",
+                        subtitle: "Type /agent <path> or pick a folder",
+                        icon: "terminal"
+                    ) {
+                        if let idx = threads.firstIndex(where: { $0.id == threadID }) {
+                            if threads[idx].workingDirectory != nil {
+                                threads[idx].agentEnabled = true
+                                toastManager.show(.success("Agent mode ON", icon: "terminal"))
+                            } else {
+                                isShowingAgentDirectoryPicker = true
+                            }
+                        }
+                    })
             }
         }
 
@@ -720,9 +877,9 @@ struct ContentView: View {
         let dateFormatter = DateFormatter()
         dateFormatter.dateStyle = .medium
         dateFormatter.timeStyle = .short
-        
+
         var markdown = "# \(thread.title)\n\n"
-        
+
         for message in thread.messages {
             let role: String
             switch message.role {
@@ -734,12 +891,12 @@ struct ContentView: View {
             markdown += "\(role) — _\(timestamp)_\n\n"
             markdown += "\(message.text)\n\n---\n\n"
         }
-        
+
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.init(filenameExtension: "md")!]
         panel.nameFieldStringValue = "\(thread.title).md"
         panel.canCreateDirectories = true
-        
+
         if panel.runModal() == .OK, let url = panel.url {
             do {
                 try markdown.write(to: url, atomically: true, encoding: .utf8)
@@ -859,7 +1016,8 @@ struct ContentView: View {
     private func retryLastResponse() {
         guard let idx = selectedThreadIndex, !isSending else { return }
         // Remove the last assistant message
-        if let lastAssistantIdx = threads[idx].messages.lastIndex(where: { $0.role == .assistant }) {
+        if let lastAssistantIdx = threads[idx].messages.lastIndex(where: { $0.role == .assistant })
+        {
             threads[idx].messages.remove(at: lastAssistantIdx)
         }
         // Re-send without touching draft — reuse existing history
@@ -980,7 +1138,8 @@ struct ContentView: View {
             if lhs.provider != rhs.provider {
                 return lhs.provider.rawValue < rhs.provider.rawValue
             }
-            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
+                == .orderedAscending
         }
         models = collected
 
@@ -997,7 +1156,8 @@ struct ContentView: View {
             }
         }
 
-        let loadedMessage = parts.isEmpty ? "No models loaded." : "Loaded \(parts.joined(separator: " · "))."
+        let loadedMessage =
+            parts.isEmpty ? "No models loaded." : "Loaded \(parts.joined(separator: " · "))."
         if errors.isEmpty {
             statusMessage = loadedMessage
         } else {
@@ -1037,7 +1197,8 @@ struct ContentView: View {
         isSending = true
         statusMessage = nil
 
-        let userMessage = ChatMessage(id: UUID(), role: .user, text: text, timestamp: .now, attachments: messageAttachments)
+        let userMessage = ChatMessage(
+            id: UUID(), role: .user, text: text, timestamp: .now, attachments: messageAttachments)
         threads[idx].messages.append(userMessage)
         if threads[idx].title == "New Chat" {
             threads[idx].title = String(text.prefix(40))
@@ -1065,7 +1226,8 @@ struct ContentView: View {
     /// - `/agent <path>` — set working directory and enable agent mode
     private func handleAgentCommand(_ text: String, threadIndex idx: Int) {
         let parts = text.split(separator: " ", maxSplits: 1)
-        let argument = parts.count > 1 ? String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines) : nil
+        let argument =
+            parts.count > 1 ? String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines) : nil
 
         draft = ""
 
@@ -1146,7 +1308,8 @@ struct ContentView: View {
         // Merge tools: MCP tools + built-in agent tools (if agent mode is on)
         // Claude Code and Codex handle their own tools internally — don't pass ours
         let isCLIProvider = model.provider == .claudeCode || model.provider == .openAICodex
-        let availableTools: [MCPTool] = isCLIProvider
+        let availableTools: [MCPTool] =
+            isCLIProvider
             ? []
             : (isAgent
                 ? mcpManager.tools + AgentTools.definitions()
@@ -1176,8 +1339,11 @@ struct ContentView: View {
                 }
 
                 let toolResult: ToolResultInfo? = {
-                    if message.role == .tool, let tcID = message.toolCallID, let name = message.toolName {
-                        return ToolResultInfo(toolCallID: tcID, toolName: name, content: message.text, isError: false)
+                    if message.role == .tool, let tcID = message.toolCallID,
+                        let name = message.toolName
+                    {
+                        return ToolResultInfo(
+                            toolCallID: tcID, toolName: name, content: message.text, isError: false)
                     }
                     return nil
                 }()
@@ -1220,12 +1386,14 @@ struct ContentView: View {
                     await MainActor.run {
                         switch event {
                         case .textDelta(let delta):
-                            appendStreamDelta(delta, to: assistantID, in: threadID)
+                            bufferStreamDelta(delta, to: assistantID, in: threadID)
                         case .toolCallStart(_, _, _):
                             break
                         case .toolCallArgumentDelta(_, _):
                             break
                         case .cliToolUse(let id, let name, let arguments, let serverName):
+                            // Flush any pending text before adding tool call
+                            flushStreamBuffer()
                             // Append CLI tool call to the message in real-time for live display
                             appendCLIToolCall(
                                 ChatMessage.ToolCall(
@@ -1238,7 +1406,26 @@ struct ContentView: View {
                                 to: assistantID, in: threadID
                             )
                         case .done:
-                            break
+                            flushStreamBuffer()
+                        }
+                    }
+                }
+
+                // Update token usage from API response if available
+                if let usage = result.usage {
+                    await MainActor.run {
+                        if let threadIdx = threads.firstIndex(where: { $0.id == threadID }) {
+                            let contextWindow = model.contextWindow
+                            if var tokenUsage = threads[threadIdx].tokenUsage {
+                                tokenUsage.updateActual(usage)
+                                threads[threadIdx].tokenUsage = tokenUsage
+                            } else {
+                                threads[threadIdx].tokenUsage = ThreadTokenUsage(
+                                    estimatedTokens: usage.totalTokens,
+                                    actualTokens: usage.totalTokens,
+                                    contextWindow: contextWindow
+                                )
+                            }
                         }
                     }
                 }
@@ -1247,7 +1434,10 @@ struct ContentView: View {
                 if !result.toolCalls.isEmpty {
                     // Update the assistant message with tool call info
                     guard let threadIdx = threads.firstIndex(where: { $0.id == threadID }),
-                          let msgIdx = threads[threadIdx].messages.firstIndex(where: { $0.id == assistantID }) else {
+                        let msgIdx = threads[threadIdx].messages.firstIndex(where: {
+                            $0.id == assistantID
+                        })
+                    else {
                         return
                     }
 
@@ -1269,10 +1459,15 @@ struct ContentView: View {
                     }
 
                     // Detect repeated identical tool calls to prevent infinite loops
-                    let currentSignature = result.toolCalls.map { "\($0.name):\($0.arguments)" }.joined(separator: "|")
+                    let currentSignature = result.toolCalls.map { "\($0.name):\($0.arguments)" }
+                        .joined(separator: "|")
                     if currentSignature == previousToolCallSignature {
-                        if messageText(for: assistantID, in: threadID).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            setMessageText("The model repeated the same tool call. Stopping to prevent a loop.", for: assistantID, in: threadID)
+                        if messageText(for: assistantID, in: threadID).trimmingCharacters(
+                            in: .whitespacesAndNewlines
+                        ).isEmpty {
+                            setMessageText(
+                                "The model repeated the same tool call. Stopping to prevent a loop.",
+                                for: assistantID, in: threadID)
                         }
                         return
                     }
@@ -1280,7 +1475,8 @@ struct ContentView: View {
 
                     // Map tool call server names from tool registry
                     let resolvedToolCalls = result.toolCalls.map { tc -> ChatMessage.ToolCall in
-                        let serverName = availableTools.first(where: { $0.name == tc.name })?.serverName ?? ""
+                        let serverName =
+                            availableTools.first(where: { $0.name == tc.name })?.serverName ?? ""
                         return ChatMessage.ToolCall(
                             id: tc.id,
                             name: tc.name,
@@ -1298,7 +1494,9 @@ struct ContentView: View {
                         // Parse arguments
                         let args: [String: Any]
                         if let data = tc.arguments.data(using: .utf8),
-                           let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                            let dict = try? JSONSerialization.jsonObject(with: data)
+                                as? [String: Any]
+                        {
                             args = dict
                         } else {
                             args = [:]
@@ -1307,15 +1505,20 @@ struct ContentView: View {
                         if AgentTools.isBuiltIn(serverName: tc.serverName) {
                             // Built-in agent tool
                             let isDangerous = AgentTools.isDestructive(tc.name)
-                            let isDangerousMode = isAgent && threads[threads.firstIndex(where: { $0.id == threadID })!].dangerousMode
+                            let isDangerousMode =
+                                isAgent
+                                && threads[threads.firstIndex(where: { $0.id == threadID })!]
+                                    .dangerousMode
 
                             if isDangerous && !isDangerousMode {
                                 // Normal mode: destructive tool — ask for user confirmation
-                                let approved = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                                let approved = await withCheckedContinuation {
+                                    (continuation: CheckedContinuation<Bool, Never>) in
                                     pendingToolConfirmation = PendingToolConfirmation(
                                         toolName: tc.name,
                                         arguments: args,
-                                        displaySummary: PendingToolConfirmation.summary(toolName: tc.name, arguments: args),
+                                        displaySummary: PendingToolConfirmation.summary(
+                                            toolName: tc.name, arguments: args),
                                         continuation: continuation,
                                         workingDirectory: workDir
                                     )
@@ -1323,7 +1526,8 @@ struct ContentView: View {
 
                                 if approved {
                                     // Snapshot before execution for undo
-                                    let undoEntry = captureBeforeState(toolName: tc.name, arguments: args, workDir: workDir ?? ".")
+                                    let undoEntry = captureBeforeState(
+                                        toolName: tc.name, arguments: args, workDir: workDir ?? ".")
                                     do {
                                         toolResultText = try await agentToolExecutor.execute(
                                             toolName: tc.name,
@@ -1331,7 +1535,10 @@ struct ContentView: View {
                                             workingDirectory: workDir ?? "."
                                         )
                                         // Finalize undo entry with the new content
-                                        if let entry = finalizeUndoEntry(undoEntry, toolName: tc.name, arguments: args, workDir: workDir ?? ".") {
+                                        if let entry = finalizeUndoEntry(
+                                            undoEntry, toolName: tc.name, arguments: args,
+                                            workDir: workDir ?? ".")
+                                        {
                                             undoHistoryByThread[threadID, default: []].append(entry)
                                         }
                                     } catch {
@@ -1342,14 +1549,18 @@ struct ContentView: View {
                                 }
                             } else if isDangerous && isDangerousMode {
                                 // Dangerous mode: auto-approve, but capture undo state
-                                let undoEntry = captureBeforeState(toolName: tc.name, arguments: args, workDir: workDir ?? ".")
+                                let undoEntry = captureBeforeState(
+                                    toolName: tc.name, arguments: args, workDir: workDir ?? ".")
                                 do {
                                     toolResultText = try await agentToolExecutor.execute(
                                         toolName: tc.name,
                                         arguments: args,
                                         workingDirectory: workDir ?? "."
                                     )
-                                    if let entry = finalizeUndoEntry(undoEntry, toolName: tc.name, arguments: args, workDir: workDir ?? ".") {
+                                    if let entry = finalizeUndoEntry(
+                                        undoEntry, toolName: tc.name, arguments: args,
+                                        workDir: workDir ?? ".")
+                                    {
                                         undoHistoryByThread[threadID, default: []].append(entry)
                                     }
                                 } catch {
@@ -1379,12 +1590,15 @@ struct ContentView: View {
                                     .compactMap { $0.text }
                                     .joined(separator: "\n")
                             } catch {
-                                toolResultText = "Error executing tool: \(error.localizedDescription)"
+                                toolResultText =
+                                    "Error executing tool: \(error.localizedDescription)"
                             }
                         }
 
                         // Add tool result message to thread
-                        guard let tIdx = threads.firstIndex(where: { $0.id == threadID }) else { return }
+                        guard let tIdx = threads.firstIndex(where: { $0.id == threadID }) else {
+                            return
+                        }
                         let toolMessage = ChatMessage(
                             id: UUID(),
                             role: .tool,
@@ -1427,7 +1641,8 @@ struct ContentView: View {
                     setMessageText(text, for: assistantID, in: threadID)
                 } else {
                     setMessageText(
-                        "\(messageText(for: assistantID, in: threadID))\n\n\(text)", for: assistantID,
+                        "\(messageText(for: assistantID, in: threadID))\n\n\(text)",
+                        for: assistantID,
                         in: threadID)
                 }
                 statusMessage = text
@@ -1448,11 +1663,15 @@ struct ContentView: View {
             return
         }
         threads[threadIndex].messages[messageIndex].text.append(delta)
+        // Trigger scroll update when streaming text changes
+        lastStreamUpdate = Date()
     }
 
     /// Append a CLI tool call to a message's toolCalls array during streaming.
     /// This allows tool call chips to appear in real-time as the CLI provider executes them.
-    private func appendCLIToolCall(_ toolCall: ChatMessage.ToolCall, to messageID: UUID, in threadID: UUID) {
+    private func appendCLIToolCall(
+        _ toolCall: ChatMessage.ToolCall, to messageID: UUID, in threadID: UUID
+    ) {
         guard let threadIndex = threads.firstIndex(where: { $0.id == threadID }),
             let messageIndex = threads[threadIndex].messages.firstIndex(where: {
                 $0.id == messageID
@@ -1486,6 +1705,89 @@ struct ContentView: View {
             return ""
         }
         return threads[threadIndex].messages[messageIndex].text
+    }
+
+    // MARK: - Streaming Buffer Management
+
+    /// Buffers a streaming delta and schedules a flush to batch UI updates.
+    /// This reduces per-token lag by updating state every 50ms instead of per token.
+    private func bufferStreamDelta(_ delta: String, to messageID: UUID, in threadID: UUID) {
+        // If buffer is for a different message/thread, flush immediately first
+        if streamBufferMessageID != messageID || streamBufferThreadID != threadID {
+            flushStreamBuffer()
+            streamBufferMessageID = messageID
+            streamBufferThreadID = threadID
+        }
+
+        streamBuffer.append(delta)
+
+        // Cancel existing flush timer
+        streamFlushWorkItem?.cancel()
+
+        // Schedule flush in 50ms
+        let workItem = DispatchWorkItem { [self] in
+            flushStreamBuffer()
+        }
+        streamFlushWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: workItem)
+    }
+
+    /// Flushes the accumulated stream buffer to the message.
+    /// Call this when streaming ends or when switching messages.
+    private func flushStreamBuffer() {
+        guard !streamBuffer.isEmpty,
+            let messageID = streamBufferMessageID,
+            let threadID = streamBufferThreadID
+        else {
+            return
+        }
+
+        appendStreamDelta(streamBuffer, to: messageID, in: threadID)
+        streamBuffer = ""
+    }
+
+    /// Clears the stream buffer without applying it (used for cleanup).
+    private func clearStreamBuffer() {
+        streamBuffer = ""
+        streamBufferMessageID = nil
+        streamBufferThreadID = nil
+        streamFlushWorkItem?.cancel()
+        streamFlushWorkItem = nil
+    }
+
+    // MARK: - Scroll Throttling
+
+    /// Throttles scrollTo calls to ~30fps and respects user scroll position.
+    /// Only auto-scrolls if auto-scroll is enabled and user is at bottom.
+    /// If auto-scroll is disabled, user must scroll manually.
+    /// If user scrolled up while auto-scroll is enabled, shows "New Messages" indicator.
+    private func throttledScrollToLast(proxy: ScrollViewProxy) {
+        let now = Date()
+        guard now.timeIntervalSince(lastScrollTime) >= scrollThrottleInterval else { return }
+        lastScrollTime = now
+
+        // Don't auto-scroll if disabled in settings
+        guard isAutoScrollEnabled else {
+            return
+        }
+
+        // Don't auto-scroll if user is reading older messages
+        guard !isUserScrolledUp else {
+            // Mark that there are unread messages while scrolled up
+            hasUnreadMessages = true
+            return
+        }
+
+        if let lastID = currentMessages.last?.id {
+            // Use minimal animation during streaming for better performance
+            if streamingMessageID != nil {
+                proxy.scrollTo(lastID, anchor: .bottom)
+            } else {
+                withAnimation {
+                    proxy.scrollTo(lastID, anchor: .bottom)
+                }
+            }
+        }
     }
 
     // MARK: - Tool Confirmation Overlay
@@ -1570,7 +1872,9 @@ struct ContentView: View {
                             .foregroundStyle(theme.textSecondary)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 7)
-                            .background(theme.composerBackground, in: RoundedRectangle(cornerRadius: 8))
+                            .background(
+                                theme.composerBackground, in: RoundedRectangle(cornerRadius: 8)
+                            )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 8)
                                     .stroke(theme.composerBorder, lineWidth: 1)
@@ -1827,9 +2131,11 @@ struct ContentView: View {
     }
 
     private func commandLooksDangerous(_ command: String) -> Bool {
-        let dangerous = ["rm ", "rm\t", "rmdir", "sudo", "chmod", "chown", "mv ", "dd ",
-                         "> /", ">> /", "| sudo", "curl | sh", "curl | bash",
-                         "format", "mkfs", "kill ", "killall", "pkill"]
+        let dangerous = [
+            "rm ", "rm\t", "rmdir", "sudo", "chmod", "chown", "mv ", "dd ",
+            "> /", ">> /", "| sudo", "curl | sh", "curl | bash",
+            "format", "mkfs", "kill ", "killall", "pkill",
+        ]
         let lower = command.lowercased()
         return dangerous.contains { lower.contains($0) }
     }
@@ -1844,9 +2150,13 @@ struct ContentView: View {
     }
 
     private func formatBytes(_ bytes: Int) -> String {
-        if bytes < 1024 { return "\(bytes) B" }
-        else if bytes < 1024 * 1024 { return "\(bytes / 1024) KB" }
-        else { return String(format: "%.1f MB", Double(bytes) / (1024 * 1024)) }
+        if bytes < 1024 {
+            return "\(bytes) B"
+        } else if bytes < 1024 * 1024 {
+            return "\(bytes / 1024) KB"
+        } else {
+            return String(format: "%.1f MB", Double(bytes) / (1024 * 1024))
+        }
     }
 
     private func confirmationIcon(for toolName: String) -> String {
@@ -1862,7 +2172,9 @@ struct ContentView: View {
 
     /// Captures the state of a file before a destructive tool modifies it.
     /// Returns a partial tuple that will be finalized after execution.
-    private func captureBeforeState(toolName: String, arguments: [String: Any], workDir: String) -> (filePath: String, fullPath: String, previousContent: String?)? {
+    private func captureBeforeState(toolName: String, arguments: [String: Any], workDir: String)
+        -> (filePath: String, fullPath: String, previousContent: String?)?
+    {
         guard let path = arguments["path"] as? String else {
             // run_command doesn't have a single file path — skip undo for commands
             return nil
@@ -1886,7 +2198,10 @@ struct ContentView: View {
     }
 
     /// Reads the file after execution and creates a finalized UndoEntry.
-    private func finalizeUndoEntry(_ before: (filePath: String, fullPath: String, previousContent: String?)?, toolName: String, arguments: [String: Any], workDir: String) -> UndoEntry? {
+    private func finalizeUndoEntry(
+        _ before: (filePath: String, fullPath: String, previousContent: String?)?, toolName: String,
+        arguments: [String: Any], workDir: String
+    ) -> UndoEntry? {
         guard let before = before else { return nil }
 
         let newContent: String
@@ -1992,7 +2307,8 @@ struct ContentView: View {
                     // Change list
                     ScrollView {
                         LazyVStack(spacing: 0) {
-                            ForEach(Array(undoHistory.reversed().enumerated()), id: \.element.id) { _, entry in
+                            ForEach(Array(undoHistory.reversed().enumerated()), id: \.element.id) {
+                                _, entry in
                                 undoEntryRow(entry)
 
                                 theme.divider
@@ -2019,12 +2335,16 @@ struct ContentView: View {
                             .padding(.horizontal, 14)
                             .padding(.vertical, 7)
                             .background(
-                                revertableCount > 0 ? Color.red.opacity(0.1) : theme.composerBackground,
+                                revertableCount > 0
+                                    ? Color.red.opacity(0.1) : theme.composerBackground,
                                 in: RoundedRectangle(cornerRadius: 8)
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 8)
-                                    .stroke(revertableCount > 0 ? Color.red.opacity(0.3) : theme.composerBorder, lineWidth: 1)
+                                    .stroke(
+                                        revertableCount > 0
+                                            ? Color.red.opacity(0.3) : theme.composerBorder,
+                                        lineWidth: 1)
                             )
                     }
                     .buttonStyle(.plain)
@@ -2043,7 +2363,9 @@ struct ContentView: View {
                             .foregroundStyle(theme.textSecondary)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 7)
-                            .background(theme.composerBackground, in: RoundedRectangle(cornerRadius: 8))
+                            .background(
+                                theme.composerBackground, in: RoundedRectangle(cornerRadius: 8)
+                            )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 8)
                                     .stroke(theme.composerBorder, lineWidth: 1)
@@ -2160,8 +2482,9 @@ struct ContentView: View {
 
     private func revertEntry(_ entry: UndoEntry) {
         guard let threadID = selectedThreadID,
-              var entries = undoHistoryByThread[threadID],
-              let index = entries.firstIndex(where: { $0.id == entry.id }) else { return }
+            var entries = undoHistoryByThread[threadID],
+            let index = entries.firstIndex(where: { $0.id == entry.id })
+        else { return }
         do {
             try entry.revert()
             entries[index].isReverted = true
@@ -2174,7 +2497,8 @@ struct ContentView: View {
 
     private func revertAllChanges() {
         guard let threadID = selectedThreadID,
-              var entries = undoHistoryByThread[threadID] else { return }
+            var entries = undoHistoryByThread[threadID]
+        else { return }
         var revertedCount = 0
         var failedCount = 0
 
@@ -2193,9 +2517,37 @@ struct ContentView: View {
         undoHistoryByThread[threadID] = entries
 
         if failedCount == 0 {
-            toastManager.show(.success("Reverted \(revertedCount) change\(revertedCount == 1 ? "" : "s")", icon: "arrow.uturn.backward"))
+            toastManager.show(
+                .success(
+                    "Reverted \(revertedCount) change\(revertedCount == 1 ? "" : "s")",
+                    icon: "arrow.uturn.backward"))
         } else {
             toastManager.show(.error("Reverted \(revertedCount), failed \(failedCount)"))
         }
+    }
+
+    // MARK: - Message Row Helper
+
+    @ViewBuilder
+    private func messageRow(for message: ChatMessage) -> some View {
+        let lastAssistantID = currentMessages.last(where: { $0.role == .assistant })?.id
+        let isLastAssistant = message.role == .assistant && message.id == lastAssistantID
+        MessageRow(
+            message: message,
+            isStreaming: message.id == streamingMessageID,
+            isLastAssistant: isLastAssistant && !isSending
+        ) {
+            retryLastResponse()
+        }
+    }
+}
+
+// MARK: - Scroll Offset Preference Key
+
+/// Preference key for tracking scroll offset in ScrollView
+struct ScrollOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }

@@ -97,7 +97,7 @@ struct ClaudeCodeAdapter: LLMProviderAdapter {
                 await onEvent(.textDelta(content))
             }
             await onEvent(.done)
-            return StreamResult(text: content, toolCalls: [])
+            return StreamResult(text: content, toolCalls: [], usage: nil)
 
         case .json(let resultMessage):
             let text = resultMessage.result ?? ""
@@ -105,7 +105,7 @@ struct ClaudeCodeAdapter: LLMProviderAdapter {
                 await onEvent(.textDelta(text))
             }
             await onEvent(.done)
-            return StreamResult(text: text, toolCalls: [])
+            return StreamResult(text: text, toolCalls: [], usage: nil)
         }
     }
 
@@ -207,7 +207,7 @@ struct ClaudeCodeAdapter: LLMProviderAdapter {
 
         await onEvent(.done)
         // Return informational tool calls for display (these are already executed by Claude Code)
-        return StreamResult(text: fullText, toolCalls: collectedToolCalls)
+        return StreamResult(text: fullText, toolCalls: collectedToolCalls, usage: nil)
     }
 
     /// Extract text content and tool call info from an AssistantMessage's MessageResponse.

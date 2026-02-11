@@ -44,6 +44,8 @@ func streamSSE(
     var fullText = ""
     // Track tool calls being assembled from stream deltas
     var toolCallAccumulators: [Int: (id: String, name: String, arguments: String)] = [:]
+    // Track usage from the final chunk (if present)
+    var finalUsage: TokenUsage?
 
     for try await line in bytes.lines {
         try Task.checkCancellation()
@@ -55,6 +57,15 @@ func streamSSE(
         guard let data = payload.data(using: .utf8) else { continue }
 
         if let chunk = try? decoder.decode(OpenAIChatStreamChunk.self, from: data) {
+            // Check for usage information (typically in final chunk)
+            if let usage = chunk.usage {
+                finalUsage = TokenUsage(
+                    inputTokens: usage.promptTokens,
+                    outputTokens: usage.completionTokens,
+                    totalTokens: usage.totalTokens
+                )
+            }
+            
             if let choice = chunk.choices.first {
                 // Handle text content
                 if let text = choice.delta.contentText, !text.isEmpty {
@@ -98,7 +109,7 @@ func streamSSE(
     }
 
     await onEvent(.done)
-    return StreamResult(text: fullText, toolCalls: toolCalls)
+    return StreamResult(text: fullText, toolCalls: toolCalls, usage: finalUsage)
 }
 
 func collectData(from bytes: URLSession.AsyncBytes) async throws -> Data {
@@ -336,8 +347,22 @@ struct OpenAIChatStreamChunk: Decodable {
 
         let delta: Delta
     }
+    
+    /// Token usage information (only present in the final chunk of the stream)
+    struct Usage: Decodable {
+        let promptTokens: Int
+        let completionTokens: Int
+        let totalTokens: Int
+        
+        enum CodingKeys: String, CodingKey {
+            case promptTokens = "prompt_tokens"
+            case completionTokens = "completion_tokens"
+            case totalTokens = "total_tokens"
+        }
+    }
 
     let choices: [Choice]
+    let usage: Usage?
 }
 
 struct OpenAIErrorEnvelope: Decodable {

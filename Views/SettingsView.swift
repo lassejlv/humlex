@@ -1,6 +1,7 @@
 import SwiftUI
 
 enum SettingsTab: String, CaseIterable, Identifiable {
+    case general = "General"
     case providers = "Providers"
     case experimental = "Experimental"
     case mcp = "MCP Servers"
@@ -10,6 +11,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
+        case .general: return "gearshape"
         case .providers: return "bolt.horizontal"
         case .experimental: return "flask"
         case .mcp: return "server.rack"
@@ -46,6 +48,7 @@ struct SettingsView: View {
     @AppStorage("experimental_codex_enabled") private var isCodexEnabled = false
     @AppStorage("codex_sandbox_mode") private var codexSandboxModeRaw: String = CodexSandboxMode
         .readOnly.rawValue
+    @AppStorage("auto_scroll_enabled") private var isAutoScrollEnabled = true
 
     // MCP add server form
     @State private var showAddServerForm = false
@@ -85,6 +88,8 @@ struct SettingsView: View {
                 theme.divider.frame(width: 1)
 
                 switch selectedTab {
+                case .general:
+                    generalDetail
                 case .providers:
                     providerDetail
                 case .experimental:
@@ -1358,6 +1363,78 @@ struct SettingsView: View {
             )
     }
 
+    // MARK: - General Detail
+
+    private var generalDetail: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("General")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(theme.textPrimary)
+                .padding(.horizontal, 24)
+                .padding(.top, 20)
+                .padding(.bottom, 16)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    // Auto-scroll setting
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "arrow.down.circle")
+                                .font(.system(size: 16))
+                                .foregroundStyle(theme.accent)
+                                .frame(width: 24)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Auto-scroll")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundStyle(theme.textPrimary)
+
+                                Text("Automatically scroll to new messages during streaming. When disabled, you'll need to scroll manually.")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(theme.textSecondary)
+                                    .lineLimit(nil)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            Spacer()
+
+                            Toggle("", isOn: $isAutoScrollEnabled)
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                        }
+
+                        if isAutoScrollEnabled {
+                            HStack(spacing: 8) {
+                                Image(systemName: "info.circle")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(theme.textTertiary)
+
+                                Text("Scrolling up will pause auto-scroll until you scroll back to the bottom")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(theme.textTertiary)
+                            }
+                            .padding(.leading, 36)
+                        }
+                    }
+                    .padding(16)
+                    .background(
+                        theme.surfaceBackground,
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(theme.chipBorder, lineWidth: 1)
+                    )
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 16)
+            }
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
     // MARK: - Bottom Bar
 
     private var bottomBar: some View {
@@ -1427,12 +1504,12 @@ struct SettingsView: View {
 
     private func providers(for tab: SettingsTab) -> [AIProvider] {
         switch tab {
+        case .general, .mcp, .theme:
+            return []
         case .providers:
             return AIProvider.allCases.filter { !isExperimentalProvider($0) }
         case .experimental:
             return AIProvider.allCases.filter { isExperimentalProvider($0) }
-        case .mcp, .theme:
-            return []
         }
     }
 
