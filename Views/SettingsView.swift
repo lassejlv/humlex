@@ -24,6 +24,7 @@ struct SettingsView: View {
     @Binding var openRouterAPIKey: String
     @Binding var vercelAIAPIKey: String
     @Binding var geminiAPIKey: String
+    @Binding var kimiAPIKey: String
 
     let isLoadingModels: Bool
     let modelCounts: [AIProvider: Int]
@@ -189,6 +190,9 @@ struct SettingsView: View {
     private func providerRow(_ provider: AIProvider) -> some View {
         let isSelected = selectedProvider == provider && selectedTab == settingsTab(for: provider)
         let hasKey: Bool = {
+            if !provider.requiresAPIKey {
+                return true
+            }
             if provider == .claudeCode {
                 return claudeCodeAvailability?.isAvailable == true
             }
@@ -320,6 +324,8 @@ struct SettingsView: View {
                     claudeCodeDetailView
                 } else if selectedProvider == .openAICodex {
                     codexDetailView
+                } else if selectedProvider == .ollama {
+                    ollamaDetailView
                 } else {
                     apiKeyField
                 }
@@ -348,6 +354,33 @@ struct SettingsView: View {
             if let first = available.first, !available.contains(selectedProvider) {
                 selectedProvider = first
             }
+        }
+    }
+
+    // MARK: - Claude Code Detail
+
+    private var ollamaDetailView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Local Endpoint")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(theme.textSecondary)
+
+            Text("http://localhost:11434")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(theme.textPrimary)
+                .textSelection(.enabled)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(theme.codeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(theme.codeBorder, lineWidth: 1)
+                )
+
+            Text("Ollama runs locally and does not require an API key. Models are fetched from your local Ollama server.")
+                .font(.system(size: 12))
+                .foregroundStyle(theme.textSecondary)
         }
     }
 
@@ -726,6 +759,9 @@ struct SettingsView: View {
         let isEnabled = !isExperimentalProvider(selectedProvider)
             || experimentalToggleBinding(for: selectedProvider).wrappedValue
         let hasKey: Bool = {
+            if !selectedProvider.requiresAPIKey {
+                return true
+            }
             if selectedProvider == .claudeCode {
                 return claudeCodeAvailability?.isAvailable == true
             }
@@ -1382,6 +1418,8 @@ struct SettingsView: View {
         case .openRouter: return $openRouterAPIKey
         case .vercelAI: return $vercelAIAPIKey
         case .gemini: return $geminiAPIKey
+        case .kimi: return $kimiAPIKey
+        case .ollama: return .constant("")  // Ollama uses local server, no API key
         case .claudeCode: return .constant("")  // Claude Code doesn't use an API key
         case .openAICodex: return .constant("")  // Codex doesn't use an API key
         }
