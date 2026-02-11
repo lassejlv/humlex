@@ -10,16 +10,34 @@ struct MarkdownView: View {
 
     @Environment(\.appTheme) private var theme
 
+    /// Cached parsed blocks to avoid re-parsing on every view update
+    @State private var cachedBlocks: [Block] = []
+    /// Tracks the last source that was parsed (for cache invalidation)
+    @State private var lastParsedSource: String = ""
+
     init(source: String, isStreaming: Bool = false) {
         self.source = source
         self.isStreaming = isStreaming
     }
 
     var body: some View {
-        let blocks = parseBlocks(source)
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { idx, block in
-                renderBlock(block, isLast: idx == blocks.count - 1)
+            ForEach(Array(cachedBlocks.enumerated()), id: \.offset) { idx, block in
+                renderBlock(block, isLast: idx == cachedBlocks.count - 1)
+            }
+        }
+        .onAppear {
+            // Initial parse when view appears
+            if cachedBlocks.isEmpty || lastParsedSource != source {
+                cachedBlocks = parseBlocks(source)
+                lastParsedSource = source
+            }
+        }
+        .onChange(of: source) { oldValue, newValue in
+            // Only re-parse if source actually changed
+            if lastParsedSource != newValue {
+                cachedBlocks = parseBlocks(newValue)
+                lastParsedSource = newValue
             }
         }
     }

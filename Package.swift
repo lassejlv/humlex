@@ -17,6 +17,9 @@ let package = Package(
             ],
             path: ".",
             exclude: ["run.sh", "build-dmg.sh", "Assets.xcassets", "README.md", ".github", "docs"],
+            resources: [
+                .process("assets")
+            ],
             swiftSettings: [
                 .swiftLanguageMode(.v5)
             ]

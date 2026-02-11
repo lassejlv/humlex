@@ -19,7 +19,8 @@ struct GeminiAdapter: LLMProviderAdapter {
             .filter { $0.supportedGenerationMethods.contains("generateContent") }
             .map { model -> LLMModel in
                 // model.name is like "models/gemini-2.0-flash" — strip the prefix for the ID
-                let modelID = model.name.hasPrefix("models/")
+                let modelID =
+                    model.name.hasPrefix("models/")
                     ? String(model.name.dropFirst("models/".count))
                     : model.name
                 return LLMModel(
@@ -83,9 +84,14 @@ private func buildGeminiContents(from history: [LLMChatMessage]) -> [GeminiStrea
                     contents.append(Content(role: "user", parts: pendingToolResponses))
                     pendingToolResponses = []
                 }
-                contents.append(Content(role: "user", parts: [
-                    Part(text: msg.content, inlineData: nil, functionCall: nil, functionResponse: nil)
-                ]))
+                contents.append(
+                    Content(
+                        role: "user",
+                        parts: [
+                            Part(
+                                text: msg.content, inlineData: nil, functionCall: nil,
+                                functionResponse: nil)
+                        ]))
             }
 
         case .user:
@@ -108,14 +114,16 @@ private func buildGeminiContents(from history: [LLMChatMessage]) -> [GeminiStrea
             // Add text content if present
             let text = msg.content.trimmingCharacters(in: .whitespacesAndNewlines)
             if !text.isEmpty {
-                parts.append(Part(text: text, inlineData: nil, functionCall: nil, functionResponse: nil))
+                parts.append(
+                    Part(text: text, inlineData: nil, functionCall: nil, functionResponse: nil))
             }
 
             // Add functionCall parts for any tool calls the model made
             for tc in msg.toolCalls {
                 let argsDict: [String: AnyCodable]
                 if let data = tc.arguments.data(using: .utf8),
-                   let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                {
                     argsDict = dict.mapValues { AnyCodable($0) }
                 } else {
                     argsDict = [:]
@@ -125,27 +133,30 @@ private func buildGeminiContents(from history: [LLMChatMessage]) -> [GeminiStrea
                 // Gemini rejects functionCall parts without thoughtSignature, so fall
                 // back to plain text context instead of sending invalid parts.
                 guard let thoughtSignature = tc.thoughtSignature, !thoughtSignature.isEmpty else {
-                    parts.append(Part(
-                        text: "[Previous tool call: \(tc.name) with args \(tc.arguments)]",
-                        inlineData: nil,
-                        functionCall: nil,
-                        functionResponse: nil
-                    ))
+                    parts.append(
+                        Part(
+                            text: "[Previous tool call: \(tc.name) with args \(tc.arguments)]",
+                            inlineData: nil,
+                            functionCall: nil,
+                            functionResponse: nil
+                        ))
                     continue
                 }
 
-                parts.append(Part(
-                    text: nil,
-                    inlineData: nil,
-                    functionCall: Part.FunctionCallPart(name: tc.name, args: argsDict),
-                    functionResponse: nil,
-                    thoughtSignature: thoughtSignature
-                ))
+                parts.append(
+                    Part(
+                        text: nil,
+                        inlineData: nil,
+                        functionCall: Part.FunctionCallPart(name: tc.name, args: argsDict),
+                        functionResponse: nil,
+                        thoughtSignature: thoughtSignature
+                    ))
             }
 
             // Ensure at least one part
             if parts.isEmpty {
-                parts.append(Part(text: "", inlineData: nil, functionCall: nil, functionResponse: nil))
+                parts.append(
+                    Part(text: "", inlineData: nil, functionCall: nil, functionResponse: nil))
             }
 
             contents.append(Content(role: "model", parts: parts))
@@ -158,15 +169,16 @@ private func buildGeminiContents(from history: [LLMChatMessage]) -> [GeminiStrea
             let responseContent: [String: Any] = [
                 "result": msg.content
             ]
-            pendingToolResponses.append(Part(
-                text: nil,
-                inlineData: nil,
-                functionCall: nil,
-                functionResponse: Part.FunctionResponsePart(
-                    name: toolResult.toolName,
-                    response: AnyCodable(responseContent)
-                )
-            ))
+            pendingToolResponses.append(
+                Part(
+                    text: nil,
+                    inlineData: nil,
+                    functionCall: nil,
+                    functionResponse: Part.FunctionResponsePart(
+                        name: toolResult.toolName,
+                        response: AnyCodable(responseContent)
+                    )
+                ))
         }
     }
 
@@ -190,37 +202,42 @@ private func geminiContent(from msg: LLMChatMessage) -> GeminiStreamRequest.Cont
 
     // Add text file contents inline
     for att in msg.attachments where att.isText {
-        parts.append(.init(
-            text: "--- File: \(att.fileName) ---\n\(att.content)\n--- End of \(att.fileName) ---",
-            inlineData: nil,
-            functionCall: nil,
-            functionResponse: nil
-        ))
+        parts.append(
+            .init(
+                text:
+                    "--- File: \(att.fileName) ---\n\(att.content)\n--- End of \(att.fileName) ---",
+                inlineData: nil,
+                functionCall: nil,
+                functionResponse: nil
+            ))
     }
 
     // Add images as inline data
     for att in msg.attachments where att.isImage {
-        parts.append(.init(
-            text: nil,
-            inlineData: .init(mimeType: att.mimeType, data: att.content),
-            functionCall: nil,
-            functionResponse: nil
-        ))
+        parts.append(
+            .init(
+                text: nil,
+                inlineData: .init(mimeType: att.mimeType, data: att.content),
+                functionCall: nil,
+                functionResponse: nil
+            ))
     }
 
     // Add non-text, non-image files as a mention
     for att in msg.attachments where !att.isText && !att.isImage {
-        parts.append(.init(
-            text: "[Attached file: \(att.fileName) (\(att.fileSizeLabel))]",
-            inlineData: nil,
-            functionCall: nil,
-            functionResponse: nil
-        ))
+        parts.append(
+            .init(
+                text: "[Attached file: \(att.fileName) (\(att.fileSizeLabel))]",
+                inlineData: nil,
+                functionCall: nil,
+                functionResponse: nil
+            ))
     }
 
     // Add user text
     if !msg.content.isEmpty {
-        parts.append(.init(text: msg.content, inlineData: nil, functionCall: nil, functionResponse: nil))
+        parts.append(
+            .init(text: msg.content, inlineData: nil, functionCall: nil, functionResponse: nil))
     }
 
     // Ensure at least one part (Gemini requires non-empty parts)
@@ -274,16 +291,19 @@ private func streamGeminiSSE(
                     if let fc = part.functionCall {
                         let id = "gemini-tc-\(toolCallIndex)"
                         let argsData = try? JSONSerialization.data(withJSONObject: fc.args ?? [:])
-                        let argsString = argsData.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-                        toolCalls.append(ToolCallInfo(
-                            id: id,
-                            name: fc.name,
-                            arguments: argsString,
-                            serverName: "",
-                            thoughtSignature: part.thoughtSignature
-                        ))
+                        let argsString =
+                            argsData.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+                        toolCalls.append(
+                            ToolCallInfo(
+                                id: id,
+                                name: fc.name,
+                                arguments: argsString,
+                                serverName: "",
+                                thoughtSignature: part.thoughtSignature
+                            ))
                         await onEvent(.toolCallStart(index: toolCallIndex, id: id, name: fc.name))
-                        await onEvent(.toolCallArgumentDelta(index: toolCallIndex, delta: argsString))
+                        await onEvent(
+                            .toolCallArgumentDelta(index: toolCallIndex, delta: argsString))
                         toolCallIndex += 1
                         emittedAny = true
                     }
@@ -302,7 +322,7 @@ private func streamGeminiSSE(
     }
 
     await onEvent(.done)
-    return StreamResult(text: fullText, toolCalls: toolCalls)
+    return StreamResult(text: fullText, toolCalls: toolCalls, usage: nil)
 }
 
 private func geminiToolDefs(from mcpTools: [MCPTool]) -> [GeminiStreamRequest.Tool]? {
@@ -326,16 +346,9 @@ private func sanitizeGeminiSchema(_ value: Any) -> Any {
         var cleaned: [String: Any] = [:]
         for (key, nestedValue) in dict {
             // Gemini does not accept these schema fields.
-            if key == "$schema" ||
-                key == "additionalProperties" ||
-                key == "unevaluatedProperties" ||
-                key == "patternProperties" ||
-                key == "propertyNames" ||
-                key == "dependentSchemas" ||
-                key == "contains" ||
-                key == "if" ||
-                key == "then" ||
-                key == "else"
+            if key == "$schema" || key == "additionalProperties" || key == "unevaluatedProperties"
+                || key == "patternProperties" || key == "propertyNames" || key == "dependentSchemas"
+                || key == "contains" || key == "if" || key == "then" || key == "else"
             {
                 continue
             }
@@ -463,8 +476,10 @@ struct GeminiStreamChunk: Decodable {
                 init(from decoder: Decoder) throws {
                     let container = try decoder.container(keyedBy: CodingKeys.self)
                     text = try container.decodeIfPresent(String.self, forKey: .text)
-                    functionCall = try container.decodeIfPresent(FunctionCall.self, forKey: .functionCall)
-                    thoughtSignature = try container.decodeIfPresent(String.self, forKey: .thoughtSignature)
+                    functionCall = try container.decodeIfPresent(
+                        FunctionCall.self, forKey: .functionCall)
+                    thoughtSignature =
+                        try container.decodeIfPresent(String.self, forKey: .thoughtSignature)
                         ?? container.decodeIfPresent(String.self, forKey: .thought_signature)
                 }
             }

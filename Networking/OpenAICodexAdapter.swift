@@ -380,7 +380,7 @@ struct OpenAICodexAdapter: LLMProviderAdapter {
         }
 
         await onEvent(.done)
-        return StreamResult(text: fullText, toolCalls: collectedToolCalls)
+        return StreamResult(text: fullText, toolCalls: collectedToolCalls, usage: nil)
     }
 
     /// Serialize a dictionary to a JSON string for tool call arguments.

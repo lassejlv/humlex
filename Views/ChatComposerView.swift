@@ -23,6 +23,7 @@ struct ChatComposerView: View {
     let undoCount: Int
     let isSending: Bool
     let canSend: Bool
+    let contextUsage: ThreadTokenUsage?
     let onSend: () -> Void
     let onStop: () -> Void
     let onShowUndo: () -> Void
@@ -219,6 +220,9 @@ struct ChatComposerView: View {
                     }
 
                     Spacer()
+
+                    // Context usage indicator
+                    ContextUsageIndicator(usage: contextUsage, isSending: isSending)
 
                     if isSending {
                         Button {
