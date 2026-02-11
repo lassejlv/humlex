@@ -1,12 +1,12 @@
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
-import AppKit
 
 /// A file or folder entry for the @-mention popup.
 struct MentionEntry: Identifiable, Hashable {
     let id = UUID()
     let name: String
-    let relativePath: String   // path relative to workingDirectory
+    let relativePath: String  // path relative to workingDirectory
     let fullPath: String
     let isDirectory: Bool
     let fileSize: Int
@@ -34,16 +34,16 @@ struct ChatComposerView: View {
 
     // @-mention state
     @State private var showMentionPopup = false
-    @State private var mentionQuery = ""           // text after the last '@'
+    @State private var mentionQuery = ""  // text after the last '@'
     @State private var mentionResults: [MentionEntry] = []
     @State private var mentionSelectedIndex = 0
     @State private var previousDraft = ""
     @State private var isShowingModelPicker = false
     @State private var modelSearchText = ""
-    @State private var isShowingMCPDropdown = false
 
     private var selectedModelLabel: String {
-        models.first(where: { $0.reference == selectedModelReference })?.displayName ?? "Select model"
+        models.first(where: { $0.reference == selectedModelReference })?.displayName
+            ?? "Select model"
     }
 
     var body: some View {
@@ -55,11 +55,6 @@ struct ChatComposerView: View {
 
             // Input row
             VStack(spacing: 0) {
-                // @-mention popup (floats above the text input)
-                if showMentionPopup && !mentionResults.isEmpty {
-                    mentionPopupView
-                }
-
                 // Text input
                 ZStack(alignment: .topLeading) {
                     TextEditor(text: $draft)
@@ -75,20 +70,28 @@ struct ChatComposerView: View {
                         }
 
                     if draft.isEmpty && attachments.isEmpty {
-                        Text("Message (\u{21B5} to send) \u{2022} @ to mention files")
-                            .font(.system(size: 14))
-                            .foregroundStyle(theme.textTertiary)
-                            .allowsHitTesting(false)
-                            .padding(.top, 0)
-                            .padding(.leading, 4)
+                        Text(
+                            "Message (\u{21B5} to send) \u{2022} @ for files"
+                        )
+                        .font(.system(size: 14))
+                        .foregroundStyle(theme.textTertiary)
+                        .allowsHitTesting(false)
+                        .padding(.top, 0)
+                        .padding(.leading, 4)
                     }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 10)
                 .padding(.bottom, 4)
+                .overlay(alignment: .bottomLeading) {
+                    composerPopupOverlay
+                        .padding(.leading, 4)
+                        .offset(y: -50)
+                        .zIndex(100)
+                }
 
                 // Bottom bar: attach + @ mention + agent toggle + stop
-                HStack(spacing: 8) {
+                HStack(spacing: 12) {
                     Button {
                         isShowingModelPicker.toggle()
                     } label: {
@@ -115,75 +118,42 @@ struct ChatComposerView: View {
                         )
                     }
 
-                    // MCP Server dropdown
-                    Button {
-                        isShowingMCPDropdown.toggle()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "server.rack")
-                                .font(.system(size: 11))
-                            Text("MCP")
-                                .font(.system(size: 12, weight: .medium))
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 10, weight: .semibold))
+                    // Icon group with consistent styling
+                    HStack(spacing: 10) {
+                        Button {
+                            presentAttachmentOpenPanel()
+                        } label: {
+                            Image(systemName: "paperclip")
+                                .font(.system(size: 15, weight: .regular))
+                                .foregroundStyle(theme.textSecondary)
+                                .frame(width: 20, height: 20)
                         }
-                        .foregroundStyle(theme.textSecondary)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(theme.hoverBackground, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .popover(isPresented: $isShowingMCPDropdown, arrowEdge: .top) {
-                        MCPServerDropdown(isPresented: $isShowingMCPDropdown)
-                    }
+                        .buttonStyle(.plain)
+                        .help("Attach file (images, text, code)")
 
-                    Button {
-                        presentAttachmentOpenPanel()
-                    } label: {
-                        Image(systemName: "paperclip")
-                            .font(.system(size: 14))
-                            .foregroundStyle(theme.textSecondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Attach file (images, text, code)")
-
-                    // @ mention button
-                    Button {
-                        if workingDirectory != nil {
-                            // Insert @ at end of draft and trigger popup
-                            draft += "@"
-                        }
-                    } label: {
-                        Text("@")
-                            .font(.system(size: 15, weight: .medium, design: .monospaced))
-                            .foregroundStyle(workingDirectory != nil ? theme.textSecondary : theme.textTertiary)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(workingDirectory == nil)
-                    .help(workingDirectory != nil
-                        ? "Mention a file from working directory"
-                        : "Set a working directory first to mention files")
-
-                    // Agent mode toggle
-                    Button {
-                        if agentEnabled {
-                            agentEnabled = false
-                        } else {
-                            if workingDirectory == nil {
-                                isShowingDirectoryPicker = true
+                        // Agent mode toggle
+                        Button {
+                            if agentEnabled {
+                                agentEnabled = false
                             } else {
-                                agentEnabled = true
+                                if workingDirectory == nil {
+                                    isShowingDirectoryPicker = true
+                                } else {
+                                    agentEnabled = true
+                                }
                             }
+                        } label: {
+                            Image(systemName: "terminal")
+                                .font(.system(size: 15, weight: .regular))
+                                .foregroundStyle(agentEnabled ? theme.accent : theme.textSecondary)
+                                .frame(width: 20, height: 20)
                         }
-                    } label: {
-                        Image(systemName: "terminal")
-                            .font(.system(size: 14))
-                            .foregroundStyle(agentEnabled ? theme.accent : theme.textSecondary)
+                        .buttonStyle(.plain)
+                        .help(
+                            agentEnabled
+                                ? "Agent mode ON — click to disable"
+                                : "Enable agent mode (or type /agent <path>)")
                     }
-                    .buttonStyle(.plain)
-                    .help(agentEnabled
-                        ? "Agent mode ON — click to disable"
-                        : "Enable agent mode (or type /agent <path>)")
 
                     // Dangerous mode toggle (only shown when agent is enabled)
                     if agentEnabled {
@@ -195,9 +165,11 @@ struct ChatComposerView: View {
                                 .foregroundStyle(dangerousMode ? Color.red : theme.textSecondary)
                         }
                         .buttonStyle(.plain)
-                        .help(dangerousMode
-                            ? "Dangerous mode ON — auto-approves all tools. Click to disable"
-                            : "Enable dangerous mode — auto-approve tools (changes can be reverted)")
+                        .help(
+                            dangerousMode
+                                ? "Dangerous mode ON — auto-approves all tools. Click to disable"
+                                : "Enable dangerous mode — auto-approve tools (changes can be reverted)"
+                        )
                     }
 
                     // Undo history button (shown when there are tracked changes)
@@ -269,7 +241,9 @@ struct ChatComposerView: View {
                     .fill(theme.composerBackground)
                     .overlay(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(isFocused ? theme.composerBorderFocused : theme.composerBorder, lineWidth: 1)
+                            .stroke(
+                                isFocused ? theme.composerBorderFocused : theme.composerBorder,
+                                lineWidth: 1)
                     )
             )
         }
@@ -340,6 +314,17 @@ struct ChatComposerView: View {
         }
     }
 
+    private var composerPopupOverlay: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if showMentionPopup && !mentionResults.isEmpty {
+                mentionPopupView
+            }
+
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .zIndex(100)
+    }
+
     // MARK: - @-mention popup view
 
     private var mentionPopupView: some View {
@@ -366,7 +351,8 @@ struct ChatComposerView: View {
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: true) {
                     VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(mentionResults.enumerated()), id: \.element.id) { index, entry in
+                        ForEach(Array(mentionResults.enumerated()), id: \.element.id) {
+                            index, entry in
                             mentionRow(entry, isSelected: index == mentionSelectedIndex)
                                 .id(entry.id)
                                 .onTapGesture {
@@ -398,9 +384,10 @@ struct ChatComposerView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(theme.composerBorder, lineWidth: 1)
         )
-        .padding(.horizontal, 16)
-        .padding(.bottom, 4)
+        .frame(maxWidth: 360, alignment: .leading)
     }
+
+    // MARK: - Tool mention popup view for @fetch
 
     private func mentionRow(_ entry: MentionEntry, isSelected: Bool) -> some View {
         HStack(spacing: 8) {
@@ -457,9 +444,13 @@ struct ChatComposerView: View {
     }
 
     private func fileSizeLabel(_ size: Int) -> String {
-        if size < 1024 { return "\(size) B" }
-        else if size < 1024 * 1024 { return "\(size / 1024) KB" }
-        else { return String(format: "%.1f MB", Double(size) / (1024 * 1024)) }
+        if size < 1024 {
+            return "\(size) B"
+        } else if size < 1024 * 1024 {
+            return "\(size / 1024) KB"
+        } else {
+            return String(format: "%.1f MB", Double(size) / (1024 * 1024))
+        }
     }
 
     // MARK: - @-mention logic
@@ -554,7 +545,9 @@ struct ChatComposerView: View {
         }
 
         // Hidden files/directories and common noise to skip
-        let skipDirs: Set<String> = [".git", ".build", "node_modules", ".DS_Store", "__pycache__", ".swiftpm", "DerivedData"]
+        let skipDirs: Set<String> = [
+            ".git", ".build", "node_modules", ".DS_Store", "__pycache__", ".swiftpm", "DerivedData",
+        ]
 
         var entries: [MentionEntry] = []
         for name in contents {
@@ -586,13 +579,14 @@ struct ChatComposerView: View {
                 fileSize = (try? fm.attributesOfItem(atPath: fullPath)[.size] as? Int) ?? 0
             }
 
-            entries.append(MentionEntry(
-                name: name,
-                relativePath: relativePath,
-                fullPath: fullPath,
-                isDirectory: isDir.boolValue,
-                fileSize: fileSize
-            ))
+            entries.append(
+                MentionEntry(
+                    name: name,
+                    relativePath: relativePath,
+                    fullPath: fullPath,
+                    isDirectory: isDir.boolValue,
+                    fileSize: fileSize
+                ))
         }
 
         // Sort: directories first, then alphabetical
@@ -661,9 +655,11 @@ struct ChatComposerView: View {
 
     private func attachmentChip(_ attachment: Attachment) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: attachment.isImage ? "photo" : (attachment.isText ? "doc.text" : "doc"))
-                .font(.system(size: 11))
-                .foregroundStyle(theme.textSecondary)
+            Image(
+                systemName: attachment.isImage ? "photo" : (attachment.isText ? "doc.text" : "doc")
+            )
+            .font(.system(size: 11))
+            .foregroundStyle(theme.textSecondary)
 
             Text(attachment.fileName)
                 .font(.system(size: 12))
@@ -718,10 +714,12 @@ struct ChatComposerView: View {
 
     private func handleDrop(_ providers: [NSItemProvider]) {
         for provider in providers {
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { data, _ in
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) {
+                data, _ in
                 guard let data = data as? Data,
-                      let urlString = String(data: data, encoding: .utf8),
-                      let url = URL(string: urlString) else { return }
+                    let urlString = String(data: data, encoding: .utf8),
+                    let url = URL(string: urlString)
+                else { return }
                 if let attachment = loadAttachment(from: url) {
                     DispatchQueue.main.async {
                         attachments.append(attachment)
@@ -768,33 +766,36 @@ func loadAttachment(from url: URL) -> Attachment? {
     // For images, base64 encode
     if mimeType.hasPrefix("image/") {
         let base64 = data.base64EncodedString()
-        return Attachment(id: UUID(), fileName: fileName, mimeType: mimeType, content: base64, fileSize: fileSize)
+        return Attachment(
+            id: UUID(), fileName: fileName, mimeType: mimeType, content: base64, fileSize: fileSize)
     }
 
     // For text-like files, read as string
-    let textMime = mimeType.hasPrefix("text/") ||
-        mimeType == "application/json" ||
-        mimeType == "application/xml" ||
-        mimeType == "application/javascript"
+    let textMime =
+        mimeType.hasPrefix("text/") || mimeType == "application/json"
+        || mimeType == "application/xml" || mimeType == "application/javascript"
     let textExt = [
         "md", "swift", "py", "rs", "ts", "tsx", "jsx", "js", "css", "html",
         "yml", "yaml", "toml", "sh", "bash", "c", "cpp", "h", "go", "rb",
-        "java", "kt", "sql", "env", "csv", "log"
+        "java", "kt", "sql", "env", "csv", "log",
     ].contains(url.pathExtension.lowercased())
 
     if textMime || textExt {
         let text = String(data: data, encoding: .utf8) ?? data.base64EncodedString()
-        return Attachment(id: UUID(), fileName: fileName, mimeType: mimeType, content: text, fileSize: fileSize)
+        return Attachment(
+            id: UUID(), fileName: fileName, mimeType: mimeType, content: text, fileSize: fileSize)
     }
 
     // Other files: store base64
     let base64 = data.base64EncodedString()
-    return Attachment(id: UUID(), fileName: fileName, mimeType: mimeType, content: base64, fileSize: fileSize)
+    return Attachment(
+        id: UUID(), fileName: fileName, mimeType: mimeType, content: base64, fileSize: fileSize)
 }
 
 private func guessMimeType(for url: URL) -> String {
     if let utType = UTType(filenameExtension: url.pathExtension),
-       let mime = utType.preferredMIMEType {
+        let mime = utType.preferredMIMEType
+    {
         return mime
     }
     // Fallback guesses

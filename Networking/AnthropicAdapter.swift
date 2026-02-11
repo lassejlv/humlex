@@ -86,7 +86,8 @@ private func anthropicMessage(from msg: LLMChatMessage) -> AnthropicMessagesRequ
             // Parse arguments JSON string into a dict
             let inputDict: [String: Any]
             if let data = tc.arguments.data(using: .utf8),
-               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            {
                 inputDict = dict
             } else {
                 inputDict = [:]
@@ -105,7 +106,8 @@ private func anthropicMessage(from msg: LLMChatMessage) -> AnthropicMessagesRequ
 
     // Add text file contents inline
     for att in msg.attachments where att.isText {
-        parts.append(.text("--- File: \(att.fileName) ---\n\(att.content)\n--- End of \(att.fileName) ---"))
+        parts.append(
+            .text("--- File: \(att.fileName) ---\n\(att.content)\n--- End of \(att.fileName) ---"))
     }
 
     // Add images
@@ -167,8 +169,11 @@ private func streamAnthropicSSE(
                     if contentBlock.type == "tool_use" {
                         let id = contentBlock.id ?? ""
                         let name = contentBlock.name ?? ""
-                        toolUseAccumulators[currentToolUseIndex] = (id: id, name: name, arguments: "")
-                        await onEvent(.toolCallStart(index: currentToolUseIndex, id: id, name: name))
+                        toolUseAccumulators[currentToolUseIndex] = (
+                            id: id, name: name, arguments: ""
+                        )
+                        await onEvent(
+                            .toolCallStart(index: currentToolUseIndex, id: id, name: name))
                         emittedAny = true
                     }
                 }
@@ -179,9 +184,12 @@ private func streamAnthropicSSE(
                         emittedAny = true
                         fullText += text
                         await onEvent(.textDelta(text))
-                    } else if delta.type == "input_json_delta", let partial = delta.partialJson, !partial.isEmpty {
+                    } else if delta.type == "input_json_delta", let partial = delta.partialJson,
+                        !partial.isEmpty
+                    {
                         toolUseAccumulators[currentToolUseIndex]?.arguments += partial
-                        await onEvent(.toolCallArgumentDelta(index: currentToolUseIndex, delta: partial))
+                        await onEvent(
+                            .toolCallArgumentDelta(index: currentToolUseIndex, delta: partial))
                         emittedAny = true
                     }
                 }
@@ -365,11 +373,11 @@ struct AnthropicStreamEvent: Decodable {
         let id: String?
         let name: String?
     }
-    
+
     struct Usage: Decodable {
         let inputTokens: Int
         let outputTokens: Int
-        
+
         enum CodingKeys: String, CodingKey {
             case inputTokens = "input_tokens"
             case outputTokens = "output_tokens"

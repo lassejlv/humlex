@@ -84,6 +84,7 @@ struct ContentView: View {
     @State private var undoHistoryByThread: [UUID: [UndoEntry]] = [:]
     @State private var isShowingUndoPanel = false
     @State private var isShowingDeleteAllChatsAlert = false
+    @State private var isShowingRightSidebar = false
     @StateObject private var mcpManager = MCPManager.shared
     @EnvironmentObject private var themeManager: ThemeManager
     @EnvironmentObject private var appUpdater: AppUpdater
@@ -351,15 +352,193 @@ struct ContentView: View {
     }
 
     private var splitView: some View {
-        NavigationSplitView {
-            AnyView(sidebarView)
-        } detail: {
-            AnyView(detailView)
+        HSplitView {
+            // Left sidebar - chat list
+            sidebarView
+                .frame(minWidth: 220, idealWidth: 260, maxWidth: 320)
+            
+            // Center - main chat area
+            detailView
+                .frame(minWidth: 400)
+            
+            // Right sidebar - configuration (optional)
+            if isShowingRightSidebar {
+                rightSidebarView
+                    .frame(minWidth: 280, idealWidth: 320, maxWidth: 400)
+            }
         }
+    }
+    
+    private var rightSidebarView: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Text("Chat Configuration")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(theme.textPrimary)
+                
+                Spacer()
+                
+                Button {
+                    isShowingRightSidebar = false
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(theme.textSecondary)
+                        .frame(width: 24, height: 24)
+                        .background(
+                            theme.hoverBackground,
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            
+            theme.divider.frame(height: 1)
+            
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    // System Prompt Section
+                    systemPromptSection
+                    
+                    theme.divider.frame(height: 1)
+                    
+                    // Thread Info Section
+                    threadInfoSection
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
+            }
+            
+            Spacer()
+        }
+        .background(theme.sidebarBackground)
+    }
+    
+    private var systemPromptSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "text.bubble")
+                    .font(.system(size: 14))
+                    .foregroundStyle(theme.accent)
+                
+                Text("System Prompt")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(theme.textPrimary)
+                
+                Spacer()
+                
+                if !systemPromptBinding.wrappedValue.isEmpty {
+                    Button {
+                        systemPromptBinding.wrappedValue = ""
+                    } label: {
+                        Image(systemName: "xmark.circle")
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.textTertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear system prompt")
+                }
+            }
+            
+            Text("Customize the AI's behavior for this conversation.")
+                .font(.system(size: 11))
+                .foregroundStyle(theme.textSecondary)
+                .lineLimit(2)
+            
+            TextEditor(text: systemPromptBinding)
+                .font(.system(size: 12))
+                .foregroundStyle(theme.textPrimary)
+                .scrollContentBackground(.hidden)
+                .background(theme.codeBackground)
+                .frame(minHeight: 120, maxHeight: 200)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(theme.codeBorder, lineWidth: 1)
+                )
+        }
+    }
+    
+    private var threadInfoSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 14))
+                    .foregroundStyle(theme.accent)
+                
+                Text("Thread Info")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(theme.textPrimary)
+            }
+            
+            if let idx = selectedThreadIndex {
+                let thread = threads[idx]
+                
+                InfoRow(label: "Messages", value: "\(thread.messages.count)")
+                InfoRow(label: "Agent Mode", value: thread.agentEnabled ? "On" : "Off")
+                if let dir = thread.workingDirectory {
+                    InfoRow(label: "Working Dir", value: String(dir.prefix(30)) + (dir.count > 30 ? "..." : ""))
+                }
+                if let modelRef = thread.modelReference {
+                    InfoRow(label: "Model", value: modelRef)
+                }
+            } else {
+                Text("No chat selected")
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.textTertiary)
+            }
+        }
+    }
+    
+    private var systemPromptBinding: Binding<String> {
+        Binding(
+            get: {
+                guard let idx = selectedThreadIndex else { return "" }
+                return threads[idx].systemPrompt ?? ""
+            },
+            set: { newValue in
+                guard let idx = selectedThreadIndex else { return }
+                threads[idx].systemPrompt = newValue.isEmpty ? nil : newValue
+            }
+        )
     }
 
     private var sidebarView: some View {
         VStack(spacing: 0) {
+            // Search bar at the top
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.textTertiary)
+                
+                TextField("Search", text: $searchText)
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.textPrimary)
+                    .textFieldStyle(.plain)
+                
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.textTertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(theme.hoverBackground)
+            )
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            
             ScrollView {
                 LazyVStack(spacing: 2) {
                     HStack(spacing: 8) {
@@ -460,12 +639,21 @@ struct ContentView: View {
                 .help("Check for Updates")
 
                 Spacer()
+
+                Button {
+                    isShowingRightSidebar.toggle()
+                } label: {
+                    Image(systemName: "sidebar.right")
+                        .font(.system(size: 14))
+                        .foregroundStyle(isShowingRightSidebar ? theme.accent : theme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .help("Toggle Configuration Sidebar")
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
         .background(theme.sidebarBackground)
-        .searchable(text: $searchText, placement: .sidebar, prompt: "Search")
         .onChange(of: searchText) { _, newValue in
             // Debounce search input by 200ms
             searchDebounceWorkItem?.cancel()
@@ -476,142 +664,160 @@ struct ContentView: View {
             DispatchQueue.main.asyncAfter(
                 deadline: .now() + searchDebounceInterval, execute: workItem)
         }
-        .navigationSplitViewColumnWidth(min: 220, ideal: 260)
     }
 
     private var detailView: some View {
         VStack(spacing: 0) {
-            if currentMessages.isEmpty {
-                Spacer()
-                VStack(spacing: 10) {
-                    Image(systemName: "quote.bubble")
-                        .font(.system(size: 48, weight: .thin))
-                        .foregroundStyle(theme.textTertiary)
-
-                    Text("Start a conversation")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(theme.textSecondary)
-
-                    Text("Choose a chat in the sidebar or write a message below.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(theme.textTertiary)
-
-                    if statusMessage != nil {
-                        Text(statusMessage!)
-                            .font(.caption)
-                            .foregroundStyle(theme.textSecondary)
-                    }
-                }
-                Spacer()
-            } else {
-                ScrollViewReader { proxy in
-                    ZStack(alignment: .bottom) {
-                        ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 16) {
-                                ForEach(currentMessages) { message in
-                                    messageRow(for: message)
-                                        .id(message.id)
-                                }
-                            }
-                            .padding(.horizontal, 24)
-                            .padding(.vertical, 20)
-                            // Track scroll position for smart auto-scroll
-                            .background(
-                                GeometryReader { geometry in
-                                    Color.clear
-                                        .preference(
-                                            key: ScrollOffsetPreferenceKey.self,
-                                            value: geometry.frame(in: .named("scroll")).minY)
-                                }
-                            )
-                        }
-                        .coordinateSpace(name: "scroll")
-                        .onPreferenceChange(ScrollOffsetPreferenceKey.self) { value in
-                            scrollOffset = value
-                            // Check if user is near bottom (within threshold)
-                            let isAtBottom = scrollOffset > -scrollBottomThreshold
-                            if isUserScrolledUp && isAtBottom {
-                                // User scrolled back to bottom
-                                isUserScrolledUp = false
-                                hasUnreadMessages = false
-                            } else if !isUserScrolledUp && !isAtBottom {
-                                // User scrolled up away from bottom
-                                isUserScrolledUp = true
-                            }
-                        }
-                        // Throttled auto-scroll: combines all triggers and limits to ~30fps
-                        .onChange(of: currentMessages.count) { _, _ in
-                            throttledScrollToLast(proxy: proxy)
-                        }
-                        .onChange(of: currentMessages.last?.toolCalls?.count ?? 0) { _, _ in
-                            throttledScrollToLast(proxy: proxy)
-                        }
-                        // Trigger scroll when streaming text updates
-                        .onChange(of: lastStreamUpdate) { _, _ in
-                            throttledScrollToLast(proxy: proxy)
-                        }
-                        // Overlay for "New Messages" button
-                        .overlay(alignment: .bottom) {
-                            if isUserScrolledUp && hasUnreadMessages {
-                                Button {
-                                    withAnimation(.easeInOut(duration: 0.3)) {
-                                        if let lastID = currentMessages.last?.id {
-                                            proxy.scrollTo(lastID, anchor: .bottom)
-                                        }
-                                        isUserScrolledUp = false
-                                        hasUnreadMessages = false
-                                    }
-                                } label: {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "arrow.down")
-                                            .font(.system(size: 11, weight: .semibold))
-                                        Text("New Messages")
-                                            .font(.system(size: 12, weight: .medium))
-                                    }
-                                    .foregroundStyle(theme.accent)
-                                    .padding(.horizontal, 14)
-                                    .padding(.vertical, 8)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                            .fill(theme.background)
-                                            .shadow(
-                                                color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
-                                    )
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                            .stroke(theme.accent.opacity(0.3), lineWidth: 1)
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                                .padding(.bottom, 16)
-                                .transition(.move(edge: .bottom).combined(with: .opacity))
-                            }
-                        }
-                    }  // Close ZStack
-                }
-            }
-
-            ChatComposerView(
-                draft: $draft,
-                attachments: $pendingAttachments,
-                models: models,
-                selectedModelReference: $selectedModelReference,
-                agentEnabled: agentEnabledBinding,
-                dangerousMode: dangerousModeBinding,
-                workingDirectory: workingDirectoryBinding,
-                undoCount: undoHistory.filter { !$0.isReverted }.count,
-                isSending: isSending,
-                canSend: canSend,
-                contextUsage: currentContextUsage
-            ) {
-                startSend()
-            } onStop: {
-                stopStreaming()
-            } onShowUndo: {
-                isShowingUndoPanel = true
-            }
+            detailContent
+            chatComposerView
         }
         .background(theme.background)
+    }
+
+    @ViewBuilder
+    private var detailContent: some View {
+        if currentMessages.isEmpty {
+            emptyStateView
+        } else {
+            messageListView
+        }
+    }
+
+    private var emptyStateView: some View {
+        VStack {
+            Spacer()
+            VStack(spacing: 10) {
+                Image(systemName: "quote.bubble")
+                    .font(.system(size: 48, weight: .thin))
+                    .foregroundStyle(theme.textTertiary)
+
+                Text("Start a conversation")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(theme.textSecondary)
+
+                Text("Choose a chat in the sidebar or write a message below.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(theme.textTertiary)
+
+                if statusMessage != nil {
+                    Text(statusMessage!)
+                        .font(.caption)
+                        .foregroundStyle(theme.textSecondary)
+                }
+            }
+            Spacer()
+        }
+    }
+
+    private var messageListView: some View {
+        ScrollViewReader { proxy in
+            ZStack(alignment: .bottom) {
+                messageScrollView(proxy: proxy)
+                newMessagesOverlay(proxy: proxy)
+            }
+        }
+    }
+
+    private func messageScrollView(proxy: ScrollViewProxy) -> some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                ForEach(currentMessages) { message in
+                    messageRow(for: message)
+                        .id(message.id)
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .background(
+                GeometryReader { geometry in
+                    Color.clear
+                        .preference(
+                            key: ScrollOffsetPreferenceKey.self,
+                            value: geometry.frame(in: .named("scroll")).minY)
+                }
+            )
+        }
+        .coordinateSpace(name: "scroll")
+        .onPreferenceChange(ScrollOffsetPreferenceKey.self) { value in
+            scrollOffset = value
+            let isAtBottom = scrollOffset > -scrollBottomThreshold
+            if isUserScrolledUp && isAtBottom {
+                isUserScrolledUp = false
+                hasUnreadMessages = false
+            } else if !isUserScrolledUp && !isAtBottom {
+                isUserScrolledUp = true
+            }
+        }
+        .onChange(of: currentMessages.count) { _, _ in
+            throttledScrollToLast(proxy: proxy)
+        }
+        .onChange(of: currentMessages.last?.toolCalls?.count ?? 0) { _, _ in
+            throttledScrollToLast(proxy: proxy)
+        }
+        .onChange(of: lastStreamUpdate) { _, _ in
+            throttledScrollToLast(proxy: proxy)
+        }
+    }
+
+    private func newMessagesOverlay(proxy: ScrollViewProxy) -> some View {
+        Group {
+            if isUserScrolledUp && hasUnreadMessages {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        if let lastID = currentMessages.last?.id {
+                            proxy.scrollTo(lastID, anchor: .bottom)
+                        }
+                        isUserScrolledUp = false
+                        hasUnreadMessages = false
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.down")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("New Messages")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundStyle(theme.accent)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(theme.background)
+                            .shadow(
+                                color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(theme.accent.opacity(0.3), lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 16)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+    }
+
+    private var chatComposerView: some View {
+        ChatComposerView(
+            draft: $draft,
+            attachments: $pendingAttachments,
+            models: models,
+            selectedModelReference: $selectedModelReference,
+            agentEnabled: agentEnabledBinding,
+            dangerousMode: dangerousModeBinding,
+            workingDirectory: workingDirectoryBinding,
+            undoCount: undoHistory.filter { !$0.isReverted }.count,
+            isSending: isSending,
+            canSend: canSend,
+            contextUsage: currentContextUsage
+        ) {
+            startSend()
+        } onStop: {
+            stopStreaming()
+        } onShowUndo: {
+            isShowingUndoPanel = true
+        }
     }
 
     // MARK: - Command Palette Actions
@@ -1306,6 +1512,7 @@ struct ContentView: View {
         var previousToolCallSignature: String? = nil
 
         // Merge tools: MCP tools + built-in agent tools (if agent mode is on)
+        // Always include fetch tool for normal chat mode
         // Claude Code and Codex handle their own tools internally — don't pass ours
         let isCLIProvider = model.provider == .claudeCode || model.provider == .openAICodex
         let availableTools: [MCPTool] =
@@ -1313,7 +1520,7 @@ struct ContentView: View {
             ? []
             : (isAgent
                 ? mcpManager.tools + AgentTools.definitions()
-                : mcpManager.tools)
+                : mcpManager.tools + AgentTools.fetchDefinitions())
 
         for _ in 0..<maxToolIterations {
             // Build history from current thread messages
@@ -1357,11 +1564,38 @@ struct ContentView: View {
                 )
             }
 
-            // Prepend agent system prompt (invisible in UI, only sent to LLM)
+            // Build system prompt: custom prompt + agent tools prompt (if applicable)
+            var systemPromptParts: [String] = []
+            
+            // Add custom system prompt from sidebar if set
+            if let customPrompt = threads[currentIdx].systemPrompt, !customPrompt.isEmpty {
+                systemPromptParts.append(customPrompt)
+            }
+            
+            // Add agent system prompt (invisible in UI, only sent to LLM)
             if isAgent, let dir = workDir {
+                systemPromptParts.append(AgentTools.systemPrompt(workingDirectory: dir))
+            } else if !isAgent && availableTools.contains(where: { $0.name == "fetch" }) {
+                // Add minimal fetch tool prompt for normal mode
+                let fetchPrompt = """
+                You have access to the fetch tool for making HTTP requests. Use it to retrieve data from APIs or websites.
+                
+                fetch parameters:
+                - url (required): The URL to fetch
+                - method: HTTP method (GET, POST, PUT, DELETE, PATCH) - defaults to GET
+                - headers: Optional HTTP headers as key-value pairs
+                - body: Request body for POST/PUT/PATCH
+                - timeout: Timeout in seconds (default 30, max 60)
+                """
+                systemPromptParts.append(fetchPrompt)
+            }
+            
+            // Insert combined system prompt at the beginning of history
+            if !systemPromptParts.isEmpty {
+                let combinedSystemPrompt = systemPromptParts.joined(separator: "\n\n")
                 let systemMsg = LLMChatMessage(
                     role: .system,
-                    content: AgentTools.systemPrompt(workingDirectory: dir),
+                    content: combinedSystemPrompt,
                     attachments: [],
                     toolCalls: [],
                     toolResult: nil
@@ -2549,5 +2783,27 @@ struct ScrollOffsetPreferenceKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
+    }
+}
+
+/// Helper view for displaying labeled information in the right sidebar
+struct InfoRow: View {
+    let label: String
+    let value: String
+    @Environment(\.appTheme) private var theme
+
+    var body: some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundStyle(theme.textSecondary)
+
+            Spacer()
+
+            Text(value)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(theme.textPrimary)
+                .lineLimit(1)
+        }
     }
 }

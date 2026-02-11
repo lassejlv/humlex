@@ -60,25 +60,33 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Title bar
-            HStack {
+            // Modern title bar with centered title
+            ZStack {
                 Text("Settings")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(theme.textSecondary)
-                Spacer()
-                Button {
-                    onClose()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 16))
-                        .foregroundStyle(theme.textSecondary)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(theme.textPrimary)
+                
+                HStack {
+                    Spacer()
+                    Button {
+                        onClose()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(theme.textSecondary)
+                            .frame(width: 24, height: 24)
+                            .background(
+                                theme.hoverBackground,
+                                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .help("Close")
                 }
-                .buttonStyle(.plain)
-                .help("Close")
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 16)
-            .padding(.bottom, 12)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(theme.background)
 
             theme.divider.frame(height: 1)
 
@@ -106,7 +114,7 @@ struct SettingsView: View {
             // Bottom bar
             bottomBar
         }
-        .frame(width: 640, height: 480)
+        .frame(width: 700, height: 520)
         .background(theme.background)
     }
 
@@ -114,31 +122,43 @@ struct SettingsView: View {
 
     private var settingsSidebar: some View {
         ScrollView {
-            VStack(spacing: 2) {
-                // Tab buttons
-                ForEach(SettingsTab.allCases) { tab in
-                    tabRow(tab)
+            VStack(spacing: 16) {
+                // Main navigation section
+                VStack(spacing: 2) {
+                    ForEach(SettingsTab.allCases) { tab in
+                        tabRow(tab)
+                    }
                 }
 
                 // Provider sub-items (shown when providers tab is selected)
                 if selectedTab == .providers {
-                    theme.divider.frame(height: 1)
-                        .padding(.vertical, 4)
-                        .padding(.horizontal, 8)
-
-                    ForEach(providers(for: .providers)) { provider in
-                        providerRow(provider)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Providers")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(theme.textTertiary)
+                            .padding(.horizontal, 12)
+                        
+                        VStack(spacing: 1) {
+                            ForEach(providers(for: .providers)) { provider in
+                                providerRow(provider)
+                            }
+                        }
                     }
                 }
 
                 // Experimental provider sub-items
                 if selectedTab == .experimental {
-                    theme.divider.frame(height: 1)
-                        .padding(.vertical, 4)
-                        .padding(.horizontal, 8)
-
-                    ForEach(providers(for: .experimental)) { provider in
-                        experimentalProviderRow(provider)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Experimental")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(theme.textTertiary)
+                            .padding(.horizontal, 12)
+                        
+                        VStack(spacing: 1) {
+                            ForEach(providers(for: .experimental)) { provider in
+                                experimentalProviderRow(provider)
+                            }
+                        }
                     }
                 }
 
@@ -146,19 +166,25 @@ struct SettingsView: View {
                 if selectedTab == .mcp {
                     let serverNames = Array(mcpManager.serverStatuses.keys).sorted()
                     if !serverNames.isEmpty {
-                        theme.divider.frame(height: 1)
-                            .padding(.vertical, 4)
-                            .padding(.horizontal, 8)
-
-                        ForEach(serverNames, id: \.self) { name in
-                            mcpServerRow(name)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Servers")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(theme.textTertiary)
+                                .padding(.horizontal, 12)
+                            
+                            VStack(spacing: 1) {
+                                ForEach(serverNames, id: \.self) { name in
+                                    mcpServerRow(name)
+                                }
+                            }
                         }
                     }
                 }
             }
-            .padding(8)
+            .padding(.vertical, 12)
+            .padding(.horizontal, 8)
         }
-        .frame(width: 200)
+        .frame(width: 220)
         .background(theme.sidebarBackground)
     }
 
@@ -169,17 +195,17 @@ struct SettingsView: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: tab.icon)
-                    .font(.system(size: 14))
-                    .foregroundStyle(isSelected ? theme.textPrimary : theme.textSecondary)
-                    .frame(width: 18)
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(isSelected ? theme.accent : theme.textSecondary)
+                    .frame(width: 20)
 
                 Text(tab.rawValue)
-                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                    .foregroundStyle(theme.textPrimary)
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
+                    .foregroundStyle(isSelected ? theme.textPrimary : theme.textSecondary)
 
                 Spacer()
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(
                 isSelected
@@ -214,34 +240,34 @@ struct SettingsView: View {
             selectedProvider = provider
         } label: {
             HStack(spacing: 10) {
-                ProviderIcon(slug: provider.iconSlug, size: 18)
+                ProviderIcon(slug: provider.iconSlug, size: 16)
                     .foregroundColor(isSelected ? theme.accent : theme.textSecondary)
 
                 Text(provider.rawValue)
-                    .font(.system(size: 13))
-                    .foregroundStyle(theme.textPrimary)
+                    .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
+                    .foregroundStyle(isSelected ? theme.textPrimary : theme.textSecondary)
 
                 Spacer()
 
                 if hasKey {
-                    Circle()
-                        .fill(Color.green)
-                        .frame(width: 6, height: 6)
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.green)
                 } else {
-                    Circle()
-                        .fill(theme.textTertiary.opacity(0.5))
-                        .frame(width: 6, height: 6)
+                    Image(systemName: "circle")
+                        .font(.system(size: 10))
+                        .foregroundStyle(theme.textTertiary.opacity(0.4))
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
             .background(
                 isSelected
                     ? theme.selectionBackground
                     : Color.clear,
-                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
             )
-            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .contentShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
     }
