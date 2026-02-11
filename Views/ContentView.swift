@@ -37,6 +37,7 @@ struct ContentView: View {
     @State private var openRouterAPIKey: String = ""
     @State private var vercelAIAPIKey: String = ""
     @State private var geminiAPIKey: String = ""
+    @State private var kimiAPIKey: String = ""
     @State private var didLoadAPIKeys = false
     @State private var isShowingSettings = false
     @State private var streamingMessageID: UUID?
@@ -150,315 +151,317 @@ struct ContentView: View {
         )
     }
 
-    var body: some View {
+    var body: some View { mainView }
+
+    private var mainView: some View { buildMainView() }
+
+    private func buildMainView() -> AnyView {
+        let base = splitView.toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    createThread()
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                }
+                .help("New Chat")
+            }
+        }
+
+        let dialogs = base
+            .sheet(isPresented: $isShowingSettings) { settingsSheet }
+            .alert("Delete Chat", isPresented: Binding(
+                get: { threadToDelete != nil },
+                set: { if !$0 { threadToDelete = nil } }
+            )) {
+                Button("Cancel", role: .cancel) {
+                    threadToDelete = nil
+                }
+                Button("Delete", role: .destructive) {
+                    if let thread = threadToDelete {
+                        let title = thread.title
+                        threads.removeAll { $0.id == thread.id }
+                        if selectedThreadID == thread.id {
+                            selectedThreadID = threads.first?.id
+                        }
+                        toastManager.show(.success("Deleted \"\(title)\"", icon: "trash"))
+                    }
+                    threadToDelete = nil
+                }
+            } message: {
+                Text("Are you sure you want to delete \"\(threadToDelete?.title ?? "this chat")\"? This cannot be undone.")
+            }
+            .alert("Delete All Chats", isPresented: $isShowingDeleteAllChatsAlert) {
+                Button("Cancel", role: .cancel) {}
+                Button("Delete All", role: .destructive) {
+                    clearAllChats(showToast: true)
+                }
+            } message: {
+                Text("This removes all conversations and cannot be undone.")
+            }
+
+        let lifecycle = dialogs
+            .onAppear {
+                if !didLoadAPIKeys {
+                    loadAPIKeysFromKeychain()
+                    didLoadAPIKeys = true
+                }
+
+                loadChatsFromDisk()
+
+                if let persistedID = UUID(uuidString: selectedThreadIDRaw),
+                   threads.contains(where: { $0.id == persistedID }) {
+                    selectedThreadID = persistedID
+                }
+
+                if selectedThreadID == nil {
+                    selectedThreadID = threads.first?.id
+                }
+
+                if models.isEmpty {
+                    Task { await fetchModels() }
+                }
+
+                Task { await mcpManager.loadAndConnect() }
+            }
+            .onDisappear {
+                stopStreaming()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .openSettingsRequested)) { _ in
+                isShowingSettings = true
+            }
+            .onChange(of: openAIAPIKey) { _, newValue in
+                persistAPIKeyToKeychain(newValue, for: .openAI)
+            }
+            .onChange(of: anthropicAPIKey) { _, newValue in
+                persistAPIKeyToKeychain(newValue, for: .anthropic)
+            }
+            .onChange(of: openRouterAPIKey) { _, newValue in
+                persistAPIKeyToKeychain(newValue, for: .openRouter)
+            }
+            .onChange(of: vercelAIAPIKey) { _, newValue in
+                persistAPIKeyToKeychain(newValue, for: .vercelAI)
+            }
+            .onChange(of: geminiAPIKey) { _, newValue in
+                persistAPIKeyToKeychain(newValue, for: .gemini)
+            }
+            .onChange(of: kimiAPIKey) { _, newValue in
+                persistAPIKeyToKeychain(newValue, for: .kimi)
+            }
+            .onChange(of: selectedThreadID) { _, newValue in
+                selectedThreadIDRaw = newValue?.uuidString ?? ""
+            }
+            .onChange(of: threads) { _, newValue in
+                schedulePersist(newValue)
+            }
+
+        let decorated = lifecycle
+            .overlay {
+                CommandPaletteOverlay(
+                    isPresented: $isCommandPaletteOpen,
+                    actions: commandPaletteActions
+                )
+            }
+            .overlay {
+                if let confirmation = pendingToolConfirmation {
+                    toolConfirmationOverlay(confirmation)
+                }
+            }
+            .overlay {
+                if isShowingUndoPanel {
+                    undoPanelOverlay
+                }
+            }
+            .commandPaletteShortcut(isPresented: $isCommandPaletteOpen)
+            .fileImporter(
+                isPresented: $isShowingAgentDirectoryPicker,
+                allowedContentTypes: [.folder],
+                allowsMultipleSelection: false
+            ) { result in
+                if case .success(let urls) = result, let url = urls.first,
+                   let idx = selectedThreadIndex {
+                    threads[idx].workingDirectory = url.path
+                    threads[idx].agentEnabled = true
+                    let abbreviated = abbreviatePathForToast(url.path)
+                    toastManager.show(.success("Agent mode ON • \(abbreviated)"))
+                }
+            }
+
+        return AnyView(decorated)
+    }
+
+    private var splitView: some View {
         NavigationSplitView {
-            VStack(spacing: 0) {
-                ScrollView {
-                    LazyVStack(spacing: 2) {
-                        ForEach(filteredThreads) { thread in
-                            let isSelected = thread.id == selectedThreadID
-                            Button {
-                                selectedThreadID = thread.id
-                            } label: {
-                                ThreadRow(thread: thread, isSelected: isSelected)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 4)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                            .fill(isSelected ? theme.selectionBackground : Color.clear)
-                                    )
-                                    .contentShape(RoundedRectangle(cornerRadius: 8))
-                            }
-                            .buttonStyle(.plain)
-                            .contextMenu {
-                                Button {
-                                    exportThreadToMarkdown(thread)
-                                } label: {
-                                    Label("Export to Markdown", systemImage: "doc.text")
-                                }
-                                
-                                Divider()
-
-                                Button(role: .destructive) {
-                                    isShowingDeleteAllChatsAlert = true
-                                } label: {
-                                    Label("Delete All Chats", systemImage: "trash.slash")
-                                }
-
-                                Divider()
-                                
-                                Button(role: .destructive) {
-                                    threadToDelete = thread
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 4)
-                }
-                .contextMenu {
-                    Button(role: .destructive) {
-                        isShowingDeleteAllChatsAlert = true
-                    } label: {
-                        Label("Delete All Chats", systemImage: "trash.slash")
-                    }
-                }
-
-                theme.divider.frame(height: 1)
-
-                // Bottom toolbar with settings
-                HStack {
-                    Button {
-                        isShowingSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                            .font(.system(size: 14))
-                            .foregroundStyle(theme.textSecondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Settings")
-
-                    Button {
-                        appUpdater.checkForUpdates()
-                    } label: {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                            .font(.system(size: 14))
-                            .foregroundStyle(theme.textSecondary)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!appUpdater.canCheckForUpdates)
-                    .help("Check for Updates")
-
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-            }
-            .background(theme.sidebarBackground)
-            .searchable(text: $searchText, placement: .sidebar, prompt: "Search")
-            .navigationSplitViewColumnWidth(min: 220, ideal: 260)
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        createThread()
-                    } label: {
-                        Image(systemName: "square.and.pencil")
-                    }
-                    .help("New Chat")
-                }
-            }
+            AnyView(sidebarView)
         } detail: {
-            VStack(spacing: 0) {
-                // Main content area
-                if currentMessages.isEmpty {
-                    // Empty state
-                    Spacer()
-                    VStack(spacing: 16) {
-                        Image(systemName: "quote.bubble")
-                            .font(.system(size: 48, weight: .thin))
-                            .foregroundStyle(theme.textTertiary)
-                        if statusMessage != nil {
-                            Text(statusMessage!)
-                                .font(.caption)
-                                .foregroundStyle(theme.textSecondary)
+            AnyView(detailView)
+        }
+    }
+
+    private var sidebarView: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                LazyVStack(spacing: 2) {
+                    ForEach(filteredThreads) { thread in
+                        let isSelected = thread.id == selectedThreadID
+                        Button {
+                            selectedThreadID = thread.id
+                        } label: {
+                            ThreadRow(thread: thread, isSelected: isSelected)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .fill(isSelected ? theme.selectionBackground : Color.clear)
+                                )
+                                .contentShape(RoundedRectangle(cornerRadius: 8))
                         }
-                    }
-                    Spacer()
-                } else {
-                    // Chat messages
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 16) {
-                                ForEach(currentMessages) { message in
-                                    let isLastAssistant = message.role == .assistant
-                                        && message.id == currentMessages.last(where: { $0.role == .assistant })?.id
-                                    MessageRow(
-                                        message: message,
-                                        isStreaming: message.id == streamingMessageID,
-                                        isLastAssistant: isLastAssistant && !isSending
-                                    ) {
-                                        retryLastResponse()
-                                    }
-                                    .id(message.id)
-                                }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button {
+                                exportThreadToMarkdown(thread)
+                            } label: {
+                                Label("Export to Markdown", systemImage: "doc.text")
                             }
-                            .padding(.horizontal, 24)
-                            .padding(.vertical, 20)
-                        }
-                        .onChange(of: currentMessages.count) { _, _ in
-                            if let lastID = currentMessages.last?.id {
-                                withAnimation {
-                                    proxy.scrollTo(lastID, anchor: .bottom)
-                                }
+
+                            Divider()
+
+                            Button(role: .destructive) {
+                                isShowingDeleteAllChatsAlert = true
+                            } label: {
+                                Label("Delete All Chats", systemImage: "trash.slash")
                             }
-                        }
-                        .onChange(of: currentMessages.last?.text ?? "") { _, _ in
-                            if let lastID = currentMessages.last?.id {
-                                proxy.scrollTo(lastID, anchor: .bottom)
-                            }
-                        }
-                        .onChange(of: currentMessages.last?.toolCalls?.count ?? 0) { _, _ in
-                            if let lastID = currentMessages.last?.id {
-                                proxy.scrollTo(lastID, anchor: .bottom)
+
+                            Divider()
+
+                            Button(role: .destructive) {
+                                threadToDelete = thread
+                            } label: {
+                                Label("Delete", systemImage: "trash")
                             }
                         }
                     }
                 }
-
-                // Composer at bottom
-                ChatComposerView(
-                    draft: $draft,
-                    attachments: $pendingAttachments,
-                    models: models,
-                    selectedModelReference: $selectedModelReference,
-                    agentEnabled: agentEnabledBinding,
-                    dangerousMode: dangerousModeBinding,
-                    workingDirectory: workingDirectoryBinding,
-                    undoCount: undoHistory.filter { !$0.isReverted }.count,
-                    isSending: isSending,
-                    canSend: canSend
-                ) {
-                    startSend()
-                } onStop: {
-                    stopStreaming()
-                } onShowUndo: {
-                    isShowingUndoPanel = true
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+            }
+            .contextMenu {
+                Button(role: .destructive) {
+                    isShowingDeleteAllChatsAlert = true
+                } label: {
+                    Label("Delete All Chats", systemImage: "trash.slash")
                 }
             }
-            .background(theme.background)
+
+            theme.divider.frame(height: 1)
+
+            HStack {
+                Button {
+                    isShowingSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 14))
+                        .foregroundStyle(theme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .help("Settings")
+
+                Button {
+                    appUpdater.checkForUpdates()
+                } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 14))
+                        .foregroundStyle(theme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .disabled(!appUpdater.canCheckForUpdates)
+                .help("Check for Updates")
+
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
         }
-        .sheet(isPresented: $isShowingSettings) {
-            SettingsView(
-                openAIAPIKey: $openAIAPIKey,
-                anthropicAPIKey: $anthropicAPIKey,
-                openRouterAPIKey: $openRouterAPIKey,
-                vercelAIAPIKey: $vercelAIAPIKey,
-                geminiAPIKey: $geminiAPIKey,
-                isLoadingModels: isLoadingModels,
-                modelCounts: modelCounts,
-                statusMessage: statusMessage
+        .background(theme.sidebarBackground)
+        .searchable(text: $searchText, placement: .sidebar, prompt: "Search")
+        .navigationSplitViewColumnWidth(min: 220, ideal: 260)
+    }
+
+    private var detailView: some View {
+        VStack(spacing: 0) {
+            if currentMessages.isEmpty {
+                Spacer()
+                VStack(spacing: 16) {
+                    Image(systemName: "quote.bubble")
+                        .font(.system(size: 48, weight: .thin))
+                        .foregroundStyle(theme.textTertiary)
+                    if statusMessage != nil {
+                        Text(statusMessage!)
+                            .font(.caption)
+                            .foregroundStyle(theme.textSecondary)
+                    }
+                }
+                Spacer()
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 16) {
+                            ForEach(currentMessages) { message in
+                                let isLastAssistant = message.role == .assistant
+                                    && message.id == currentMessages.last(where: { $0.role == .assistant })?.id
+                                MessageRow(
+                                    message: message,
+                                    isStreaming: message.id == streamingMessageID,
+                                    isLastAssistant: isLastAssistant && !isSending
+                                ) {
+                                    retryLastResponse()
+                                }
+                                .id(message.id)
+                            }
+                        }
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 20)
+                    }
+                    .onChange(of: currentMessages.count) { _, _ in
+                        if let lastID = currentMessages.last?.id {
+                            withAnimation {
+                                proxy.scrollTo(lastID, anchor: .bottom)
+                            }
+                        }
+                    }
+                    .onChange(of: currentMessages.last?.text ?? "") { _, _ in
+                        if let lastID = currentMessages.last?.id {
+                            proxy.scrollTo(lastID, anchor: .bottom)
+                        }
+                    }
+                    .onChange(of: currentMessages.last?.toolCalls?.count ?? 0) { _, _ in
+                        if let lastID = currentMessages.last?.id {
+                            proxy.scrollTo(lastID, anchor: .bottom)
+                        }
+                    }
+                }
+            }
+
+            ChatComposerView(
+                draft: $draft,
+                attachments: $pendingAttachments,
+                models: models,
+                selectedModelReference: $selectedModelReference,
+                agentEnabled: agentEnabledBinding,
+                dangerousMode: dangerousModeBinding,
+                workingDirectory: workingDirectoryBinding,
+                undoCount: undoHistory.filter { !$0.isReverted }.count,
+                isSending: isSending,
+                canSend: canSend
             ) {
-                Task { await fetchModels() }
-            } onClose: {
-                isShowingSettings = false
+                startSend()
+            } onStop: {
+                stopStreaming()
+            } onShowUndo: {
+                isShowingUndoPanel = true
             }
         }
-        .alert("Delete Chat", isPresented: Binding(
-            get: { threadToDelete != nil },
-            set: { if !$0 { threadToDelete = nil } }
-        )) {
-            Button("Cancel", role: .cancel) {
-                threadToDelete = nil
-            }
-            Button("Delete", role: .destructive) {
-                if let thread = threadToDelete {
-                    let title = thread.title
-                    threads.removeAll { $0.id == thread.id }
-                    if selectedThreadID == thread.id {
-                        selectedThreadID = threads.first?.id
-                    }
-                    toastManager.show(.success("Deleted \"\(title)\"", icon: "trash"))
-                }
-                threadToDelete = nil
-            }
-        } message: {
-            Text("Are you sure you want to delete \"\(threadToDelete?.title ?? "this chat")\"? This cannot be undone.")
-        }
-        .alert("Delete All Chats", isPresented: $isShowingDeleteAllChatsAlert) {
-            Button("Cancel", role: .cancel) {}
-            Button("Delete All", role: .destructive) {
-                clearAllChats(showToast: true)
-            }
-        } message: {
-            Text("This removes all conversations and cannot be undone.")
-        }
-        .onAppear {
-            if !didLoadAPIKeys {
-                loadAPIKeysFromKeychain()
-                didLoadAPIKeys = true
-            }
-
-            loadChatsFromDisk()
-
-            if let persistedID = UUID(uuidString: selectedThreadIDRaw),
-                threads.contains(where: { $0.id == persistedID })
-            {
-                selectedThreadID = persistedID
-            }
-
-            if selectedThreadID == nil {
-                selectedThreadID = threads.first?.id
-            }
-
-            if models.isEmpty {
-                Task { await fetchModels() }
-            }
-
-            // Connect to MCP servers
-            Task { await mcpManager.loadAndConnect() }
-        }
-        .onDisappear {
-            stopStreaming()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .openSettingsRequested)) { _ in
-            isShowingSettings = true
-        }
-        .onChange(of: openAIAPIKey) { _, newValue in
-            persistAPIKeyToKeychain(newValue, for: .openAI)
-        }
-        .onChange(of: anthropicAPIKey) { _, newValue in
-            persistAPIKeyToKeychain(newValue, for: .anthropic)
-        }
-        .onChange(of: openRouterAPIKey) { _, newValue in
-            persistAPIKeyToKeychain(newValue, for: .openRouter)
-        }
-        .onChange(of: vercelAIAPIKey) { _, newValue in
-            persistAPIKeyToKeychain(newValue, for: .vercelAI)
-        }
-        .onChange(of: geminiAPIKey) { _, newValue in
-            persistAPIKeyToKeychain(newValue, for: .gemini)
-        }
-        .onChange(of: selectedThreadID) { _, newValue in
-            selectedThreadIDRaw = newValue?.uuidString ?? ""
-        }
-        .onChange(of: threads) { _, newValue in
-            schedulePersist(newValue)
-        }
-        .overlay {
-            CommandPaletteOverlay(
-                isPresented: $isCommandPaletteOpen,
-                actions: commandPaletteActions
-            )
-        }
-        .overlay {
-            // Agent tool confirmation overlay
-            if let confirmation = pendingToolConfirmation {
-                toolConfirmationOverlay(confirmation)
-            }
-        }
-        .overlay {
-            // Undo history panel
-            if isShowingUndoPanel {
-                undoPanelOverlay
-            }
-        }
-        .commandPaletteShortcut(isPresented: $isCommandPaletteOpen)
-        .fileImporter(
-            isPresented: $isShowingAgentDirectoryPicker,
-            allowedContentTypes: [.folder],
-            allowsMultipleSelection: false
-        ) { result in
-            if case .success(let urls) = result, let url = urls.first,
-               let idx = selectedThreadIndex {
-                threads[idx].workingDirectory = url.path
-                threads[idx].agentEnabled = true
-                let abbreviated = abbreviatePathForToast(url.path)
-                toastManager.show(.success("Agent mode ON \u{2022} \(abbreviated)"))
-            }
-        }
+        .background(theme.background)
     }
 
     // MARK: - Command Palette Actions
@@ -660,6 +663,24 @@ struct ContentView: View {
         return actions
     }
 
+    private var settingsSheet: some View {
+        SettingsView(
+            openAIAPIKey: $openAIAPIKey,
+            anthropicAPIKey: $anthropicAPIKey,
+            openRouterAPIKey: $openRouterAPIKey,
+            vercelAIAPIKey: $vercelAIAPIKey,
+            geminiAPIKey: $geminiAPIKey,
+            kimiAPIKey: $kimiAPIKey,
+            isLoadingModels: isLoadingModels,
+            modelCounts: modelCounts,
+            statusMessage: statusMessage
+        ) {
+            Task { await fetchModels() }
+        } onClose: {
+            isShowingSettings = false
+        }
+    }
+
     private func createThread() {
         let thread = ChatThread(id: UUID(), title: "New Chat", messages: [])
         threads.insert(thread, at: 0)
@@ -720,6 +741,10 @@ struct ContentView: View {
             return VercelAIAdapter()
         case .gemini:
             return GeminiAdapter()
+        case .kimi:
+            return KimiAdapter()
+        case .ollama:
+            return OllamaAdapter()
         case .claudeCode:
             var adapter = ClaudeCodeAdapter()
             if let idx = selectedThreadIndex {
@@ -748,6 +773,10 @@ struct ContentView: View {
             return vercelAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         case .gemini:
             return geminiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .kimi:
+            return kimiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .ollama:
+            return ""
         case .claudeCode:
             return "claude-code"  // Sentinel value — Claude Code authenticates via CLI
         case .openAICodex:
@@ -878,6 +907,9 @@ struct ContentView: View {
             }
             if let key = try KeychainStore.loadString(for: AIProvider.gemini.keychainAccount) {
                 geminiAPIKey = key
+            }
+            if let key = try KeychainStore.loadString(for: AIProvider.kimi.keychainAccount) {
+                kimiAPIKey = key
             }
         } catch {
             statusMessage = "Failed loading API keys: \(error.localizedDescription)"
