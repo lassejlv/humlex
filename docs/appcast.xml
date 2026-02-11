@@ -6,29 +6,29 @@
     <description>Most recent updates to Humlex</description>
     <language>en</language>
     <item>
-      <title>Version 0.1.18 (Apple Silicon)</title>
-      <pubDate>Wed, 11 Feb 2026 00:07:50 +0000</pubDate>
-      <sparkle:version>0.1.18</sparkle:version>
-      <sparkle:shortVersionString>0.1.18</sparkle:shortVersionString>
+      <title>Version 0.1.19 (Apple Silicon)</title>
+      <pubDate>Wed, 11 Feb 2026 07:38:36 +0000</pubDate>
+      <sparkle:version>0.1.19</sparkle:version>
+      <sparkle:shortVersionString>0.1.19</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <enclosure
-        url="https://github.com/lassejlv/humlex/releases/download/v0.1.18/Humlex-0.1.18-arm64.dmg"
-        sparkle:edSignature="kPe4rCC2FhpFC9kzzSEu0YzJcS1yxov0c4E+7CO9EpARTmrgFmezcS4+EMc8AX/OlY94aHv5UvSuyjahKUJ3DQ=="
-        length="3270046"
+        url="https://github.com/lassejlv/humlex/releases/download/v0.1.19/Humlex-0.1.19-arm64.dmg"
+        sparkle:edSignature="VPqCWzuKksAjiV+9JvGAN+aqFgN0sIN8pzktH7lBEiVU97IH9vVNuQ5YhOpocz98rLiD3a4MjP6Cm8wOIgXODQ=="
+        length="3298130"
         type="application/octet-stream"
         sparkle:os="macos"
       />
     </item>
     <item>
-      <title>Version 0.1.18 (Intel)</title>
-      <pubDate>Wed, 11 Feb 2026 00:07:50 +0000</pubDate>
-      <sparkle:version>0.1.18</sparkle:version>
-      <sparkle:shortVersionString>0.1.18</sparkle:shortVersionString>
+      <title>Version 0.1.19 (Intel)</title>
+      <pubDate>Wed, 11 Feb 2026 07:38:36 +0000</pubDate>
+      <sparkle:version>0.1.19</sparkle:version>
+      <sparkle:shortVersionString>0.1.19</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <enclosure
-        url="https://github.com/lassejlv/humlex/releases/download/v0.1.18/Humlex-0.1.18-x86_64.dmg"
-        sparkle:edSignature="V1qPv5IfLJ3S4RcBGnvbs9fKYlL8cIusN8dFl+kLb9ylNuA7hv5bMp4nCtTiWahHwRQmZJ6rBuGhQmrUDBnPDQ=="
-        length="3386911"
+        url="https://github.com/lassejlv/humlex/releases/download/v0.1.19/Humlex-0.1.19-x86_64.dmg"
+        sparkle:edSignature="vnTPo8uadDsXOIhkdc46TWkgjV7fqrFD0DfMyFjngt+rDWa4H8r7Fi3fcpkx6ntsxvsiCoTt2Tzi9gNX29pHCA=="
+        length="3418345"
         type="application/octet-stream"
         sparkle:os="macos"
       />
