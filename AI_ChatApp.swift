@@ -5,8 +5,8 @@
 //  Created by Lasse Vestergaard on 10/02/2026.
 //
 
-import SwiftUI
 import AppKit
+import SwiftUI
 
 extension Notification.Name {
     static let openSettingsRequested = Notification.Name("openSettingsRequested")
@@ -85,7 +85,8 @@ private struct ForceQuitShortcutModifier: ViewModifier {
                 if monitor != nil { return }
                 monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                     guard event.modifierFlags.contains(.command),
-                          let key = event.charactersIgnoringModifiers?.lowercased() else {
+                        let key = event.charactersIgnoringModifiers?.lowercased()
+                    else {
                         return event
                     }
 
@@ -110,8 +111,8 @@ private struct ForceQuitShortcutModifier: ViewModifier {
     }
 }
 
-private extension View {
-    func forceQuitShortcut() -> some View {
+extension View {
+    fileprivate func forceQuitShortcut() -> some View {
         modifier(ForceQuitShortcutModifier())
     }
 }

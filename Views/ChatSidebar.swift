@@ -16,7 +16,7 @@ struct ThreadRow: View {
             if let lastMessage = thread.messages.last {
                 Text(lastMessage.text)
                     .font(.system(size: 11))
-                    .foregroundStyle(theme.textSecondary)
+                    .foregroundStyle(theme.textPrimary.opacity(0.72))
                     .lineLimit(1)
             }
         }

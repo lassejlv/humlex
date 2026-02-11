@@ -6,7 +6,7 @@ enum AIProvider: String, CaseIterable, Identifiable, Hashable {
     case openRouter = "OpenRouter"
     case vercelAI = "Vercel AI"
     case gemini = "Gemini"
-    case kimi = "Kimi"
+    case kimi = "Kimi for Coding"
     case ollama = "Ollama"
     case claudeCode = "Claude Code"
     case openAICodex = "OpenAI Codex"
@@ -57,10 +57,13 @@ struct ToolCallInfo: Hashable {
     let id: String
     let name: String
     let arguments: String  // JSON string of arguments
-    let serverName: String // MCP server that owns this tool
+    let serverName: String  // MCP server that owns this tool
     let thoughtSignature: String?
 
-    init(id: String, name: String, arguments: String, serverName: String, thoughtSignature: String? = nil) {
+    init(
+        id: String, name: String, arguments: String, serverName: String,
+        thoughtSignature: String? = nil
+    ) {
         self.id = id
         self.name = name
         self.arguments = arguments
@@ -81,10 +84,13 @@ struct LLMChatMessage: Hashable {
     let role: ChatRole
     let content: String
     let attachments: [Attachment]
-    let toolCalls: [ToolCallInfo]    // Non-empty when assistant requests tool calls
+    let toolCalls: [ToolCallInfo]  // Non-empty when assistant requests tool calls
     let toolResult: ToolResultInfo?  // Non-nil when role == .tool
 
-    init(role: ChatRole, content: String, attachments: [Attachment] = [], toolCalls: [ToolCallInfo] = [], toolResult: ToolResultInfo? = nil) {
+    init(
+        role: ChatRole, content: String, attachments: [Attachment] = [],
+        toolCalls: [ToolCallInfo] = [], toolResult: ToolResultInfo? = nil
+    ) {
         self.role = role
         self.content = content
         self.attachments = attachments

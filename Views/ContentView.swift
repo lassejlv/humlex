@@ -156,16 +156,7 @@ struct ContentView: View {
     private var mainView: some View { buildMainView() }
 
     private func buildMainView() -> AnyView {
-        let base = splitView.toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    createThread()
-                } label: {
-                    Image(systemName: "square.and.pencil")
-                }
-                .help("New Chat")
-            }
-        }
+        let base = splitView
 
         let dialogs = base
             .sheet(isPresented: $isShowingSettings) { settingsSheet }
@@ -301,6 +292,27 @@ struct ContentView: View {
         VStack(spacing: 0) {
             ScrollView {
                 LazyVStack(spacing: 2) {
+                    HStack(spacing: 8) {
+                        Text("Chats")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(theme.textSecondary)
+
+                        Spacer()
+
+                        Button {
+                            createThread()
+                        } label: {
+                            Label("New", systemImage: "square.and.pencil")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(theme.textSecondary)
+                        .help("New Chat")
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.top, 4)
+                    .padding(.bottom, 6)
+
                     ForEach(filteredThreads) { thread in
                         let isSelected = thread.id == selectedThreadID
                         Button {
@@ -391,10 +403,19 @@ struct ContentView: View {
         VStack(spacing: 0) {
             if currentMessages.isEmpty {
                 Spacer()
-                VStack(spacing: 16) {
+                VStack(spacing: 10) {
                     Image(systemName: "quote.bubble")
                         .font(.system(size: 48, weight: .thin))
                         .foregroundStyle(theme.textTertiary)
+
+                    Text("Start a conversation")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(theme.textSecondary)
+
+                    Text("Choose a chat in the sidebar or write a message below.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(theme.textTertiary)
+
                     if statusMessage != nil {
                         Text(statusMessage!)
                             .font(.caption)
@@ -2077,10 +2098,6 @@ struct ContentView: View {
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(theme.textTertiary)
                         .lineLimit(1)
-
-                    Text(formatTimestamp(entry.timestamp))
-                        .font(.system(size: 10))
-                        .foregroundStyle(theme.textTertiary)
                 }
             }
 
@@ -2139,12 +2156,6 @@ struct ContentView: View {
         default:
             return .purple
         }
-    }
-
-    private func formatTimestamp(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        return formatter.string(from: date)
     }
 
     private func revertEntry(_ entry: UndoEntry) {
