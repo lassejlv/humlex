@@ -31,13 +31,21 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
       },
       {
         name: "description",
-        content: "Native macOS app for chatting with multiple AI providers. Secure, fast, and built for macOS 14+.",
+        content:
+          "Native macOS app for chatting with multiple AI providers. Secure, fast, and built for macOS 14+.",
       },
     ],
     links: [
       {
         rel: "stylesheet",
         href: appCss,
+      },
+    ],
+    scripts: [
+      {
+        src: "https://analytics.lassejlv.dk/script.js",
+        "data-website-id": "ec9c2e97-82dc-416f-ae62-56c917017776",
+        defer: true,
       },
     ],
   }),
