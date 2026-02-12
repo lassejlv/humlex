@@ -6,6 +6,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case experimental = "Experimental"
     case mcp = "MCP Servers"
     case theme = "Theme"
+    case systemInstructions = "System Instructions"
 
     var id: String { rawValue }
 
@@ -16,6 +17,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .experimental: return "flask"
         case .mcp: return "server.rack"
         case .theme: return "paintbrush"
+        case .systemInstructions: return "text.bubble"
         }
     }
 }
@@ -49,6 +51,7 @@ struct SettingsView: View {
     @AppStorage("codex_sandbox_mode") private var codexSandboxModeRaw: String = CodexSandboxMode
         .readOnly.rawValue
     @AppStorage("auto_scroll_enabled") private var isAutoScrollEnabled = true
+    @AppStorage("default_system_instructions") private var defaultSystemInstructions: String = ""
 
     // MCP add server form
     @State private var showAddServerForm = false
@@ -106,6 +109,8 @@ struct SettingsView: View {
                     mcpDetail
                 case .theme:
                     themeDetail
+                case .systemInstructions:
+                    systemInstructionsDetail
                 }
             }
 
@@ -1389,6 +1394,65 @@ struct SettingsView: View {
             )
     }
 
+    // MARK: - System Instructions Detail
+
+    private var systemInstructionsDetail: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack {
+                Text("System Instructions")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(theme.textPrimary)
+                
+                Spacer()
+                
+                if !defaultSystemInstructions.isEmpty {
+                    Button {
+                        defaultSystemInstructions = ""
+                    } label: {
+                        Image(systemName: "xmark.circle")
+                            .font(.system(size: 14))
+                            .foregroundStyle(theme.textSecondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear system instructions")
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 20)
+            .padding(.bottom, 16)
+            
+            // Description
+            VStack(alignment: .leading, spacing: 8) {
+                Text("These instructions will be used as the default system prompt for all new chats. They define how the AI should behave and respond.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.textSecondary)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 16)
+            
+            // Text editor
+            TextEditor(text: $defaultSystemInstructions)
+                .font(.system(size: 13))
+                .foregroundStyle(theme.textPrimary)
+                .scrollContentBackground(.hidden)
+                .background(theme.codeBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(theme.codeBorder, lineWidth: 1)
+                )
+                .padding(.horizontal, 24)
+                .frame(maxHeight: .infinity)
+            
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        .background(theme.background)
+    }
+
     // MARK: - General Detail
 
     private var generalDetail: some View {
@@ -1530,7 +1594,7 @@ struct SettingsView: View {
 
     private func providers(for tab: SettingsTab) -> [AIProvider] {
         switch tab {
-        case .general, .mcp, .theme:
+        case .general, .mcp, .theme, .systemInstructions:
             return []
         case .providers:
             return AIProvider.allCases.filter { !isExperimentalProvider($0) }
