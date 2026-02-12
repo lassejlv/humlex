@@ -16,6 +16,10 @@ struct ContentView: View {
     @AppStorage("experimental_claude_code_enabled") private var isClaudeCodeEnabled = false
     @AppStorage("experimental_codex_enabled") private var isCodexEnabled = false
     @AppStorage("auto_scroll_enabled") private var isAutoScrollEnabled = true
+    @AppStorage("performance_mode_enabled") private var isPerformanceModeEnabled = true
+    @AppStorage("performance_visible_message_limit") private var performanceVisibleMessageLimit = 250
+    @AppStorage("debug_mode_enabled") private var isDebugModeEnabled = false
+    @AppStorage("model_picker_in_toolbar_enabled") private var isModelPickerInToolbarEnabled = false
 
     @State private var models: [LLMModel] = []
     @State private var isLoadingModels = false
@@ -43,6 +47,7 @@ struct ContentView: View {
     @State private var openAIAPIKey: String = ""
     @State private var anthropicAPIKey: String = ""
     @State private var openRouterAPIKey: String = ""
+    @State private var fastRouterAPIKey: String = ""
     @State private var vercelAIAPIKey: String = ""
     @State private var geminiAPIKey: String = ""
     @State private var kimiAPIKey: String = ""
@@ -58,6 +63,11 @@ struct ContentView: View {
     @State private var streamBufferMessageID: UUID?
     @State private var streamBufferThreadID: UUID?
     @State private var streamFlushWorkItem: DispatchWorkItem?
+
+    // MARK: - Large Chat Rendering
+    /// Per-thread cap for rendered messages to keep long chats responsive.
+    @State private var messageRenderLimitByThread: [UUID: Int] = [:]
+    private let messageRenderIncrement: Int = 200
 
     // MARK: - Scroll Throttling
     /// Tracks last scroll time to throttle scrollTo calls to ~30fps
@@ -84,8 +94,10 @@ struct ContentView: View {
     @State private var isShowingUndoPanel = false
     @State private var isShowingDeleteAllChatsAlert = false
     @StateObject private var mcpManager = MCPManager.shared
+    @StateObject private var debugPerformanceMonitor = DebugPerformanceMonitor()
     @EnvironmentObject private var themeManager: ThemeManager
     @EnvironmentObject private var appUpdater: AppUpdater
+    @EnvironmentObject private var statusUpdates: StatusUpdateSDK
     @Environment(\.appTheme) private var theme
     @Environment(\.toastManager) private var toastManager
 
@@ -134,6 +146,23 @@ struct ContentView: View {
     private var currentMessages: [ChatMessage] {
         guard let idx = selectedThreadIndex else { return [] }
         return threads[idx].messages
+    }
+
+    /// Message slice currently rendered in the UI (latest N messages for performance).
+    private var visibleCurrentMessages: [ChatMessage] {
+        guard isPerformanceModeEnabled else { return currentMessages }
+        guard let threadID = selectedThreadID else { return currentMessages }
+        let limit = messageRenderLimitByThread[threadID] ?? resolvedVisibleMessageLimit
+        if currentMessages.count <= limit { return currentMessages }
+        return Array(currentMessages.suffix(limit))
+    }
+
+    private var hiddenMessageCount: Int {
+        max(0, currentMessages.count - visibleCurrentMessages.count)
+    }
+
+    private var resolvedVisibleMessageLimit: Int {
+        max(100, performanceVisibleMessageLimit)
     }
 
     /// Undo history for the currently selected thread.
@@ -280,9 +309,15 @@ struct ContentView: View {
                 }
 
                 Task { await mcpManager.loadAndConnect() }
+                appUpdater.startAutomaticChecks(statusUpdates: statusUpdates, interval: 60)
+
+                if isDebugModeEnabled {
+                    debugPerformanceMonitor.start()
+                }
             }
             .onDisappear {
                 stopStreaming()
+                debugPerformanceMonitor.stop()
             }
             .onReceive(NotificationCenter.default.publisher(for: .openSettingsRequested)) { _ in
                 isShowingSettings = true
@@ -296,6 +331,9 @@ struct ContentView: View {
             .onChange(of: openRouterAPIKey) { _, newValue in
                 persistAPIKeyToKeychain(newValue, for: .openRouter)
             }
+            .onChange(of: fastRouterAPIKey) { _, newValue in
+                persistAPIKeyToKeychain(newValue, for: .fastRouter)
+            }
             .onChange(of: vercelAIAPIKey) { _, newValue in
                 persistAPIKeyToKeychain(newValue, for: .vercelAI)
             }
@@ -307,6 +345,26 @@ struct ContentView: View {
             }
             .onChange(of: selectedThreadID) { _, newValue in
                 selectedThreadIDRaw = newValue?.uuidString ?? ""
+                if let id = newValue, messageRenderLimitByThread[id] == nil {
+                    messageRenderLimitByThread[id] = resolvedVisibleMessageLimit
+                }
+            }
+            .onChange(of: isPerformanceModeEnabled) { _, newValue in
+                guard newValue, let id = selectedThreadID, messageRenderLimitByThread[id] == nil else {
+                    return
+                }
+                messageRenderLimitByThread[id] = resolvedVisibleMessageLimit
+            }
+            .onChange(of: performanceVisibleMessageLimit) { _, _ in
+                guard let id = selectedThreadID else { return }
+                messageRenderLimitByThread[id] = resolvedVisibleMessageLimit
+            }
+            .onChange(of: isDebugModeEnabled) { _, newValue in
+                if newValue {
+                    debugPerformanceMonitor.start()
+                } else {
+                    debugPerformanceMonitor.stop()
+                }
             }
             .onChange(of: threads) { _, newValue in
                 schedulePersist(newValue)
@@ -322,6 +380,13 @@ struct ContentView: View {
             .overlay {
                 if isShowingUndoPanel {
                     undoPanelOverlay
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if isDebugModeEnabled {
+                    DebugPerformanceBanner(monitor: debugPerformanceMonitor)
+                        .padding(.top, 14)
+                        .padding(.trailing, 14)
                 }
             }
             .fileImporter(
@@ -343,89 +408,52 @@ struct ContentView: View {
     }
 
     private var splitView: some View {
-        HSplitView {
-            // Left sidebar - chat list
+        NavigationSplitView {
             sidebarView
-                .frame(minWidth: 220, idealWidth: 260, maxWidth: 320)
-            
-            // Center - main chat area
+                .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
+        } detail: {
             detailView
                 .frame(minWidth: 400)
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .navigation) {
+                Button {
+                    isShowingSettings = true
+                } label: {
+                    Label("Settings", systemImage: "gearshape")
+                }
+                .help("Settings")
+
+                if isModelPickerInToolbarEnabled {
+                    modelPickerToolbarMenu
+                }
+
+                Button {
+                    appUpdater.checkForUpdates()
+                } label: {
+                    Label("Check for Updates", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .disabled(!appUpdater.canCheckForUpdates)
+                .help("Check for Updates")
+
+                Button {
+                    createThread()
+                } label: {
+                    Label("New Chat", systemImage: "square.and.pencil")
+                }
+                .keyboardShortcut("n", modifiers: .command)
+                .help("New Chat")
+            }
         }
     }
     
     private var sidebarView: some View {
-        VStack(spacing: 0) {
-            // Search bar at the top
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 12))
-                    .foregroundStyle(theme.textTertiary)
-                
-                TextField("Search", text: $searchText)
-                    .font(.system(size: 12))
-                    .foregroundStyle(theme.textPrimary)
-                    .textFieldStyle(.plain)
-                
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 12))
-                            .foregroundStyle(theme.textTertiary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(theme.hoverBackground)
-            )
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
-            
-            ScrollView {
-                LazyVStack(spacing: 2) {
-                    HStack(spacing: 8) {
-                        Text("Chats")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(theme.textSecondary)
-
-                        Spacer()
-
-                        Button {
-                            createThread()
-                        } label: {
-                            Label("New", systemImage: "square.and.pencil")
-                                .font(.system(size: 11, weight: .medium))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(theme.textSecondary)
-                        .help("New Chat")
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.top, 4)
-                    .padding(.bottom, 6)
-
-                    ForEach(filteredThreads) { thread in
-                        let isSelected = thread.id == selectedThreadID
-                        Button {
-                            selectedThreadID = thread.id
-                        } label: {
-                            ThreadRow(thread: thread, isSelected: isSelected)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 4)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .fill(isSelected ? theme.selectionBackground : Color.clear)
-                                )
-                                .contentShape(RoundedRectangle(cornerRadius: 8))
-                        }
-                        .buttonStyle(.plain)
+        List(selection: $selectedThreadID) {
+            Section("Chats") {
+                ForEach(filteredThreads) { thread in
+                    let isSelected = thread.id == selectedThreadID
+                    ThreadRow(thread: thread, isSelected: isSelected)
+                        .tag(thread.id as UUID?)
                         .contextMenu {
                             Button {
                                 exportThreadToMarkdown(thread)
@@ -436,62 +464,23 @@ struct ContentView: View {
                             Divider()
 
                             Button(role: .destructive) {
-                                isShowingDeleteAllChatsAlert = true
-                            } label: {
-                                Label("Delete All Chats", systemImage: "trash.slash")
-                            }
-
-                            Divider()
-
-                            Button(role: .destructive) {
                                 threadToDelete = thread
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
                         }
-                    }
-                }
-                .padding(.horizontal, 6)
-                .padding(.vertical, 4)
-            }
-            .contextMenu {
-                Button(role: .destructive) {
-                    isShowingDeleteAllChatsAlert = true
-                } label: {
-                    Label("Delete All Chats", systemImage: "trash.slash")
                 }
             }
-
-            theme.divider.frame(height: 1)
-
-            HStack {
-                Button {
-                    isShowingSettings = true
-                } label: {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 14))
-                        .foregroundStyle(theme.textSecondary)
-                }
-                .buttonStyle(.plain)
-                .help("Settings")
-
-                Button {
-                    appUpdater.checkForUpdates()
-                } label: {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 14))
-                        .foregroundStyle(theme.textSecondary)
-                }
-                .buttonStyle(.plain)
-                .disabled(!appUpdater.canCheckForUpdates)
-                .help("Check for Updates")
-
-                Spacer()
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
         }
-        .background(theme.sidebarBackground)
+        .listStyle(.sidebar)
+        .searchable(text: $searchText, placement: .sidebar, prompt: Text("Search"))
+        .contextMenu {
+            Button(role: .destructive) {
+                isShowingDeleteAllChatsAlert = true
+            } label: {
+                Label("Delete All Chats", systemImage: "trash.slash")
+            }
+        }
         .onChange(of: searchText) { _, newValue in
             // Debounce search input by 200ms
             searchDebounceWorkItem?.cancel()
@@ -508,6 +497,7 @@ struct ContentView: View {
         VStack(spacing: 0) {
             detailContent
             chatComposerView
+            AppStatusBarView(status: statusUpdates.current, fallbackText: statusMessage)
         }
         .background(theme.background)
     }
@@ -559,8 +549,13 @@ struct ContentView: View {
     private func messageScrollView(proxy: ScrollViewProxy) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
-                ForEach(currentMessages) { message in
-                    messageRow(for: message)
+                if hiddenMessageCount > 0 {
+                    loadEarlierMessagesButton
+                }
+
+                let lastAssistantID = currentMessages.last(where: { $0.role == .assistant })?.id
+                ForEach(visibleCurrentMessages) { message in
+                    messageRow(for: message, lastAssistantID: lastAssistantID)
                         .id(message.id)
                 }
             }
@@ -595,6 +590,24 @@ struct ContentView: View {
         .onChange(of: lastStreamUpdate) { _, _ in
             throttledScrollToLast(proxy: proxy)
         }
+    }
+
+    private var loadEarlierMessagesButton: some View {
+        HStack {
+            Spacer(minLength: 0)
+            Button {
+                guard let threadID = selectedThreadID else { return }
+                let currentLimit = messageRenderLimitByThread[threadID] ?? resolvedVisibleMessageLimit
+                let nextLimit = min(currentMessages.count, currentLimit + messageRenderIncrement)
+                messageRenderLimitByThread[threadID] = nextLimit
+            } label: {
+                Text("Load \(min(messageRenderIncrement, hiddenMessageCount)) older messages (\(hiddenMessageCount) hidden)")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .buttonStyle(.bordered)
+            Spacer(minLength: 0)
+        }
+        .padding(.bottom, 8)
     }
 
     private func newMessagesOverlay(proxy: ScrollViewProxy) -> some View {
@@ -642,6 +655,7 @@ struct ContentView: View {
             attachments: $pendingAttachments,
             models: models,
             selectedModelReference: $selectedModelReference,
+            showInlineModelPicker: !isModelPickerInToolbarEnabled,
             agentEnabled: agentEnabledBinding,
             dangerousMode: dangerousModeBinding,
             workingDirectory: workingDirectoryBinding,
@@ -663,6 +677,7 @@ struct ContentView: View {
             openAIAPIKey: $openAIAPIKey,
             anthropicAPIKey: $anthropicAPIKey,
             openRouterAPIKey: $openRouterAPIKey,
+            fastRouterAPIKey: $fastRouterAPIKey,
             vercelAIAPIKey: $vercelAIAPIKey,
             geminiAPIKey: $geminiAPIKey,
             kimiAPIKey: $kimiAPIKey,
@@ -674,6 +689,34 @@ struct ContentView: View {
         } onClose: {
             isShowingSettings = false
         }
+    }
+
+    private var modelPickerToolbarMenu: some View {
+        Menu {
+            if models.isEmpty {
+                Text("No models loaded")
+            } else {
+                ForEach(models, id: \.reference) { model in
+                    Button {
+                        selectedModelReference = model.reference
+                    } label: {
+                        if model.reference == selectedModelReference {
+                            Label(model.displayName, systemImage: "checkmark")
+                        } else {
+                            Text(model.displayName)
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(selectedModelLabel)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+        }
+        .help("Select model")
     }
 
     private func createThread() {
@@ -732,6 +775,8 @@ struct ContentView: View {
             return AnthropicAdapter()
         case .openRouter:
             return OpenRouterAdapter()
+        case .fastRouter:
+            return FastRouterAdapter()
         case .vercelAI:
             return VercelAIAdapter()
         case .gemini:
@@ -764,6 +809,8 @@ struct ContentView: View {
             return anthropicAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         case .openRouter:
             return openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .fastRouter:
+            return fastRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         case .vercelAI:
             return vercelAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         case .gemini:
@@ -897,6 +944,9 @@ struct ContentView: View {
             }
             if let key = try KeychainStore.loadString(for: AIProvider.openRouter.keychainAccount) {
                 openRouterAPIKey = key
+            }
+            if let key = try KeychainStore.loadString(for: AIProvider.fastRouter.keychainAccount) {
+                fastRouterAPIKey = key
             }
             if let key = try KeychainStore.loadString(for: AIProvider.vercelAI.keychainAccount) {
                 vercelAIAPIKey = key
@@ -1124,8 +1174,10 @@ struct ContentView: View {
 
         // Merge tools: MCP tools + built-in agent tools (if agent mode is on)
         // Always include fetch tool for normal chat mode
-        // Claude Code and Codex handle their own tools internally — don't pass ours
-        let isCLIProvider = model.provider == .claudeCode || model.provider == .openAICodex
+        // Claude Code and Codex handle their own tools internally — don't pass ours.
+        let isCLIProvider =
+            model.provider == .claudeCode
+            || model.provider == .openAICodex
         let availableTools: [MCPTool] =
             isCLIProvider
             ? []
@@ -2374,8 +2426,7 @@ struct ContentView: View {
     // MARK: - Message Row Helper
 
     @ViewBuilder
-    private func messageRow(for message: ChatMessage) -> some View {
-        let lastAssistantID = currentMessages.last(where: { $0.role == .assistant })?.id
+    private func messageRow(for message: ChatMessage, lastAssistantID: UUID?) -> some View {
         let isLastAssistant = message.role == .assistant && message.id == lastAssistantID
         MessageRow(
             message: message,

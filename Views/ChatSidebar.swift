@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 struct ThreadRow: View {
@@ -9,17 +10,17 @@ struct ThreadRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(thread.title)
-                .font(.system(size: 13, weight: .medium))
+                .font(.body.weight(isSelected ? .semibold : .regular))
                 .foregroundStyle(theme.textPrimary)
                 .lineLimit(1)
 
             if let lastMessage = thread.messages.last {
                 Text(lastMessage.text)
-                    .font(.system(size: 11))
-                    .foregroundStyle(theme.textPrimary.opacity(0.72))
+                    .font(.caption)
+                    .foregroundStyle(theme.textSecondary)
                     .lineLimit(1)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 3)
     }
 }

@@ -4,6 +4,7 @@ enum AIProvider: String, CaseIterable, Identifiable, Hashable {
     case openAI = "OpenAI"
     case anthropic = "Anthropic"
     case openRouter = "OpenRouter"
+    case fastRouter = "FastRouter"
     case vercelAI = "Vercel AI"
     case gemini = "Gemini"
     case kimi = "Kimi for Coding"
@@ -21,6 +22,8 @@ enum AIProvider: String, CaseIterable, Identifiable, Hashable {
             return "anthropic_api_key"
         case .openRouter:
             return "openrouter_api_key"
+        case .fastRouter:
+            return "fastrouter_api_key"
         case .vercelAI:
             return "vercel_ai_api_key"
         case .gemini:
@@ -163,7 +166,7 @@ enum ModelRegistry {
         
         // Try provider-specific defaults
         switch provider {
-        case .openAI, .openRouter, .vercelAI:
+        case .openAI, .openRouter, .fastRouter, .vercelAI:
             return knownModels["__openai_default__"]!
         case .anthropic:
             return knownModels["__anthropic_default__"]!

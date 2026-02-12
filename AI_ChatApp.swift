@@ -18,6 +18,7 @@ struct AI_ChatApp: App {
     @StateObject private var themeManager = ThemeManager.shared
     @StateObject private var toastManager = ToastManager.shared
     @StateObject private var appUpdater = AppUpdater()
+    @StateObject private var statusUpdates = StatusUpdateSDK()
 
     var body: some Scene {
         WindowGroup {
@@ -31,6 +32,7 @@ struct AI_ChatApp: App {
                 .environmentObject(themeManager)
                 .environmentObject(toastManager)
                 .environmentObject(appUpdater)
+                .environmentObject(statusUpdates)
                 .onAppear {
                     updateAppearance(for: themeManager.current)
                 }

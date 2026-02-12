@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 enum SettingsTab: String, CaseIterable, Identifiable {
@@ -26,6 +27,7 @@ struct SettingsView: View {
     @Binding var openAIAPIKey: String
     @Binding var anthropicAPIKey: String
     @Binding var openRouterAPIKey: String
+    @Binding var fastRouterAPIKey: String
     @Binding var vercelAIAPIKey: String
     @Binding var geminiAPIKey: String
     @Binding var kimiAPIKey: String
@@ -41,7 +43,7 @@ struct SettingsView: View {
     @Environment(\.appTheme) private var theme
     @ObservedObject private var mcpManager = MCPManager.shared
 
-    @State private var selectedTab: SettingsTab = .providers
+    @State private var selectedTab: SettingsTab = .general
     @State private var selectedProvider: AIProvider = .openAI
     @State private var claudeCodeAvailability: ClaudeCodeAvailability?
     @State private var codexAvailability: CodexAvailability?
@@ -51,6 +53,10 @@ struct SettingsView: View {
     @AppStorage("codex_sandbox_mode") private var codexSandboxModeRaw: String = CodexSandboxMode
         .readOnly.rawValue
     @AppStorage("auto_scroll_enabled") private var isAutoScrollEnabled = true
+    @AppStorage("performance_mode_enabled") private var isPerformanceModeEnabled = true
+    @AppStorage("performance_visible_message_limit") private var performanceVisibleMessageLimit = 250
+    @AppStorage("debug_mode_enabled") private var isDebugModeEnabled = false
+    @AppStorage("model_picker_in_toolbar_enabled") private var isModelPickerInToolbarEnabled = false
     @AppStorage("default_system_instructions") private var defaultSystemInstructions: String = ""
 
     // MCP add server form
@@ -61,31 +67,97 @@ struct SettingsView: View {
     @State private var newServerEnv = ""
     @State private var serverToDelete: String? = nil
 
+    private var activeSectionTitle: String {
+        switch selectedTab {
+        case .providers, .experimental:
+            return selectedProvider.rawValue
+        case .mcp:
+            return "MCP Servers"
+        case .general:
+            return "General"
+        case .theme:
+            return "Theme"
+        case .systemInstructions:
+            return "System Instructions"
+        }
+    }
+
+    private var activeSectionSubtitle: String {
+        switch selectedTab {
+        case .providers:
+            return "Manage API keys and model access"
+        case .experimental:
+            return "Preview and control experimental providers"
+        case .mcp:
+            return "Configure Model Context Protocol servers"
+        case .general:
+            return "App behavior and defaults"
+        case .theme:
+            return "Appearance and syntax palette"
+        case .systemInstructions:
+            return "Default instructions for new chats"
+        }
+    }
+
+    private var activeSectionIcon: String {
+        switch selectedTab {
+        case .providers:
+            return "bolt.horizontal"
+        case .experimental:
+            return "flask"
+        case .mcp:
+            return "server.rack"
+        case .general:
+            return "gearshape"
+        case .theme:
+            return "paintbrush"
+        case .systemInstructions:
+            return "text.bubble"
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            // Modern title bar with centered title
-            ZStack {
-                Text("Settings")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(theme.textPrimary)
-                
-                HStack {
-                    Spacer()
-                    Button {
-                        onClose()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(theme.textSecondary)
-                            .frame(width: 24, height: 24)
-                            .background(
-                                theme.hoverBackground,
-                                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .help("Close")
+            HStack(spacing: 12) {
+                Image(systemName: activeSectionIcon)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(theme.accent)
+                    .frame(width: 30, height: 30)
+                    .background(
+                        theme.surfaceBackground,
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Settings")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(theme.textPrimary)
+
+                    Text(activeSectionSubtitle)
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.textTertiary)
                 }
+
+                Spacer()
+
+                Text(activeSectionTitle)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(theme.textSecondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(theme.chipBackground, in: Capsule())
+
+                Button {
+                    onClose()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(theme.textSecondary)
+                        .frame(width: 24, height: 24)
+                        .background(theme.hoverBackground, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .help("Close")
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -98,20 +170,9 @@ struct SettingsView: View {
                 settingsSidebar
                 theme.divider.frame(width: 1)
 
-                switch selectedTab {
-                case .general:
-                    generalDetail
-                case .providers:
-                    providerDetail
-                case .experimental:
-                    providerDetail
-                case .mcp:
-                    mcpDetail
-                case .theme:
-                    themeDetail
-                case .systemInstructions:
-                    systemInstructionsDetail
-                }
+                settingsDetail
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(theme.background.opacity(0.92))
             }
 
             theme.divider.frame(height: 1)
@@ -119,108 +180,110 @@ struct SettingsView: View {
             // Bottom bar
             bottomBar
         }
-        .frame(width: 700, height: 520)
-        .background(theme.background)
+        .frame(width: 860, height: 620)
+        .background(
+            LinearGradient(
+                colors: [theme.background, theme.surfaceBackground.opacity(0.85)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(theme.chipBorder, lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.2), radius: 22, y: 12)
+    }
+
+    @ViewBuilder
+    private var settingsDetail: some View {
+        switch selectedTab {
+        case .general:
+            generalDetail
+        case .providers:
+            providerDetail
+        case .experimental:
+            providerDetail
+        case .mcp:
+            mcpDetail
+        case .theme:
+            themeDetail
+        case .systemInstructions:
+            systemInstructionsDetail
+        }
     }
 
     // MARK: - Settings Sidebar
 
     private var settingsSidebar: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                // Main navigation section
-                VStack(spacing: 2) {
-                    ForEach(SettingsTab.allCases) { tab in
-                        tabRow(tab)
+        List {
+            Section("Settings") {
+                ForEach(SettingsTab.allCases) { tab in
+                    tabRow(tab)
+                }
+            }
+
+            if selectedTab == .providers {
+                Section("Providers") {
+                    ForEach(providers(for: .providers)) { provider in
+                        providerRow(provider)
                     }
                 }
+            }
 
-                // Provider sub-items (shown when providers tab is selected)
-                if selectedTab == .providers {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Providers")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(theme.textTertiary)
-                            .padding(.horizontal, 12)
-                        
-                        VStack(spacing: 1) {
-                            ForEach(providers(for: .providers)) { provider in
-                                providerRow(provider)
-                            }
-                        }
+            if selectedTab == .experimental {
+                Section("Experimental") {
+                    ForEach(providers(for: .experimental)) { provider in
+                        experimentalProviderRow(provider)
                     }
                 }
+            }
 
-                // Experimental provider sub-items
-                if selectedTab == .experimental {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Experimental")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(theme.textTertiary)
-                            .padding(.horizontal, 12)
-                        
-                        VStack(spacing: 1) {
-                            ForEach(providers(for: .experimental)) { provider in
-                                experimentalProviderRow(provider)
-                            }
-                        }
-                    }
-                }
-
-                // MCP server sub-items (shown when MCP tab is selected)
-                if selectedTab == .mcp {
-                    let serverNames = Array(mcpManager.serverStatuses.keys).sorted()
-                    if !serverNames.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Servers")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(theme.textTertiary)
-                                .padding(.horizontal, 12)
-                            
-                            VStack(spacing: 1) {
-                                ForEach(serverNames, id: \.self) { name in
-                                    mcpServerRow(name)
-                                }
-                            }
+            if selectedTab == .mcp {
+                let serverNames = Array(mcpManager.serverStatuses.keys).sorted()
+                if !serverNames.isEmpty {
+                    Section("Servers") {
+                        ForEach(serverNames, id: \.self) { name in
+                            mcpServerRow(name)
                         }
                     }
                 }
             }
-            .padding(.vertical, 12)
-            .padding(.horizontal, 8)
         }
-        .frame(width: 220)
-        .background(theme.sidebarBackground)
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .frame(width: 250)
+        .background(theme.sidebarBackground.opacity(0.65))
     }
 
     private func tabRow(_ tab: SettingsTab) -> some View {
         let isSelected = selectedTab == tab
         return Button {
             selectedTab = tab
+            if let first = providers(for: tab).first {
+                selectedProvider = first
+            }
         } label: {
-            HStack(spacing: 10) {
+            HStack(spacing: 9) {
                 Image(systemName: tab.icon)
                     .font(.system(size: 14, weight: .regular))
                     .foregroundStyle(isSelected ? theme.accent : theme.textSecondary)
-                    .frame(width: 20)
+                    .frame(width: 18)
 
                 Text(tab.rawValue)
-                    .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
                     .foregroundStyle(isSelected ? theme.textPrimary : theme.textSecondary)
 
                 Spacer()
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(
-                isSelected
-                    ? theme.selectionBackground
-                    : Color.clear,
-                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .padding(.vertical, 4)
         }
         .buttonStyle(.plain)
+        .listRowBackground(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isSelected ? theme.selectionBackground : Color.clear)
+        )
     }
 
     private func providerRow(_ provider: AIProvider) -> some View {
@@ -244,12 +307,12 @@ struct SettingsView: View {
             selectedTab = settingsTab(for: provider)
             selectedProvider = provider
         } label: {
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 ProviderIcon(slug: provider.iconSlug, size: 16)
                     .foregroundColor(isSelected ? theme.accent : theme.textSecondary)
 
                 Text(provider.rawValue)
-                    .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
+                    .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
                     .foregroundStyle(isSelected ? theme.textPrimary : theme.textSecondary)
 
                 Spacer()
@@ -264,17 +327,13 @@ struct SettingsView: View {
                         .foregroundStyle(theme.textTertiary.opacity(0.4))
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(
-                isSelected
-                    ? theme.selectionBackground
-                    : Color.clear,
-                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 6))
+            .padding(.vertical, 4)
         }
         .buttonStyle(.plain)
+        .listRowBackground(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isSelected ? theme.selectionBackground : Color.clear)
+        )
     }
 
     private func experimentalProviderRow(_ provider: AIProvider) -> some View {
@@ -296,8 +355,7 @@ struct SettingsView: View {
 
                     Spacer()
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
+                .padding(.vertical, 4)
                 .background(
                     isSelected
                         ? theme.selectionBackground
@@ -313,6 +371,10 @@ struct SettingsView: View {
                 .toggleStyle(.switch)
                 .scaleEffect(0.75)
         }
+        .listRowBackground(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isSelected ? theme.selectionBackground : Color.clear)
+        )
     }
 
     private func mcpServerRow(_ name: String) -> some View {
@@ -334,8 +396,7 @@ struct SettingsView: View {
                 .fill(mcpStatusColor(status))
                 .frame(width: 6, height: 6)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.vertical, 4)
     }
 
     // MARK: - Provider Detail
@@ -1515,6 +1576,184 @@ struct SettingsView: View {
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .stroke(theme.chipBorder, lineWidth: 1)
                     )
+
+                    // Visible message count
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "text.line.first.and.arrowtriangle.forward")
+                                .font(.system(size: 16))
+                                .foregroundStyle(theme.accent)
+                                .frame(width: 24)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Messages to keep visible")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundStyle(theme.textPrimary)
+
+                                Text("How many recent messages stay mounted before older messages are collapsed behind \"Load older messages\".")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(theme.textSecondary)
+                                    .lineLimit(nil)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            Spacer()
+                        }
+
+                        Picker("Messages to keep visible", selection: $performanceVisibleMessageLimit) {
+                            Text("100").tag(100)
+                            Text("250").tag(250)
+                            Text("500").tag(500)
+                            Text("1000").tag(1000)
+                        }
+                        .pickerStyle(.segmented)
+                        .disabled(!isPerformanceModeEnabled)
+
+                        if !isPerformanceModeEnabled {
+                            HStack(spacing: 8) {
+                                Image(systemName: "info.circle")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(theme.textTertiary)
+
+                                Text("Enable Performance mode to apply this setting.")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(theme.textTertiary)
+                            }
+                        }
+                    }
+                    .padding(16)
+                    .background(
+                        theme.surfaceBackground,
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(theme.chipBorder, lineWidth: 1)
+                    )
+
+                    // Performance mode setting
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "speedometer")
+                                .font(.system(size: 16))
+                                .foregroundStyle(theme.accent)
+                                .frame(width: 24)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Performance mode")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundStyle(theme.textPrimary)
+
+                                Text("Improve large chat responsiveness by rendering recent messages first and loading older messages on demand.")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(theme.textSecondary)
+                                    .lineLimit(nil)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            Spacer()
+
+                            Toggle("", isOn: $isPerformanceModeEnabled)
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                        }
+
+                        if isPerformanceModeEnabled {
+                            HStack(spacing: 8) {
+                                Image(systemName: "info.circle")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(theme.textTertiary)
+
+                                Text("Older messages are available with \"Load older messages\" above the chat.")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(theme.textTertiary)
+                            }
+                            .padding(.leading, 36)
+                        }
+                    }
+                    .padding(16)
+                    .background(
+                        theme.surfaceBackground,
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(theme.chipBorder, lineWidth: 1)
+                    )
+
+                    // Model picker placement
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "slider.horizontal.3")
+                                .font(.system(size: 16))
+                                .foregroundStyle(theme.accent)
+                                .frame(width: 24)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Model picker in toolbar")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundStyle(theme.textPrimary)
+
+                                Text("Move model selection from the composer to the top toolbar next to Settings.")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(theme.textSecondary)
+                                    .lineLimit(nil)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            Spacer()
+
+                            Toggle("", isOn: $isModelPickerInToolbarEnabled)
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                        }
+                    }
+                    .padding(16)
+                    .background(
+                        theme.surfaceBackground,
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(theme.chipBorder, lineWidth: 1)
+                    )
+
+                    // Debug mode setting
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "ladybug")
+                                .font(.system(size: 16))
+                                .foregroundStyle(theme.accent)
+                                .frame(width: 24)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Debug mode")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundStyle(theme.textPrimary)
+
+                                Text("Show a live banner with FPS, CPU, and memory usage to diagnose UI performance.")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(theme.textSecondary)
+                                    .lineLimit(nil)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            Spacer()
+
+                            Toggle("", isOn: $isDebugModeEnabled)
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                        }
+                    }
+                    .padding(16)
+                    .background(
+                        theme.surfaceBackground,
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(theme.chipBorder, lineWidth: 1)
+                    )
                 }
                 .padding(.horizontal, 24)
                 .padding(.bottom, 16)
@@ -1547,10 +1786,12 @@ struct SettingsView: View {
                             ProgressView()
                                 .controlSize(.small)
                         }
+                        Image(systemName: "arrow.down.circle")
                         Text("Fetch Models")
                             .font(.system(size: 12, weight: .medium))
                     }
                 }
+                .buttonStyle(.bordered)
                 .disabled(isLoadingModels)
             }
 
@@ -1565,15 +1806,18 @@ struct SettingsView: View {
                             ProgressView()
                                 .controlSize(.small)
                         }
+                        Image(systemName: "arrow.clockwise")
                         Text("Reload All")
                             .font(.system(size: 12, weight: .medium))
                     }
                 }
+                .buttonStyle(.bordered)
                 .disabled(mcpManager.isLoading)
             }
         }
         .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
+        .background(theme.surfaceBackground.opacity(0.65))
     }
 
     // MARK: - Helpers
@@ -1583,6 +1827,7 @@ struct SettingsView: View {
         case .openAI: return $openAIAPIKey
         case .anthropic: return $anthropicAPIKey
         case .openRouter: return $openRouterAPIKey
+        case .fastRouter: return $fastRouterAPIKey
         case .vercelAI: return $vercelAIAPIKey
         case .gemini: return $geminiAPIKey
         case .kimi: return $kimiAPIKey

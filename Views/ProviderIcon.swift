@@ -104,6 +104,7 @@ extension AIProvider {
         case .openAI: return "openai"
         case .anthropic: return "anthropic"
         case .openRouter: return "openrouter"
+        case .fastRouter: return "fastrouter"
         case .vercelAI: return "vercel"
         case .gemini: return "google"
         case .kimi: return "moonshot"
