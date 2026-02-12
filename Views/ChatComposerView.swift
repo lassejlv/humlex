@@ -40,6 +40,7 @@ struct ChatComposerView: View {
     @State private var previousDraft = ""
     @State private var isShowingModelPicker = false
     @State private var modelSearchText = ""
+    @State private var isDraggingOver = false
 
     private var selectedModelLabel: String {
         models.first(where: { $0.reference == selectedModelReference })?.displayName
@@ -242,8 +243,8 @@ struct ChatComposerView: View {
                     .overlay(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .stroke(
-                                isFocused ? theme.composerBorderFocused : theme.composerBorder,
-                                lineWidth: 1)
+                                isDraggingOver ? theme.accent : (isFocused ? theme.composerBorderFocused : theme.composerBorder),
+                                lineWidth: isDraggingOver ? 2 : 1)
                     )
             )
         }
@@ -308,7 +309,10 @@ struct ChatComposerView: View {
         ) { result in
             handleDirectoryPick(result)
         }
-        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+        .onDrop(
+            of: [.fileURL],
+            isTargeted: $isDraggingOver
+        ) { providers in
             handleDrop(providers)
             return true
         }

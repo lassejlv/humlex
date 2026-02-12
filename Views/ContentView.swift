@@ -77,14 +77,12 @@ struct ContentView: View {
     @State private var lastStreamUpdate: Date = Date.distantPast
 
     @State private var threadToDelete: ChatThread?
-    @State private var isCommandPaletteOpen: Bool = false
     @State private var agentToolExecutor = AgentToolExecutor()
     @State private var pendingToolConfirmation: PendingToolConfirmation?
     @State private var isShowingAgentDirectoryPicker = false
     @State private var undoHistoryByThread: [UUID: [UndoEntry]] = [:]
     @State private var isShowingUndoPanel = false
     @State private var isShowingDeleteAllChatsAlert = false
-    @State private var isShowingRightSidebar = false
     @StateObject private var mcpManager = MCPManager.shared
     @EnvironmentObject private var themeManager: ThemeManager
     @EnvironmentObject private var appUpdater: AppUpdater
@@ -317,12 +315,6 @@ struct ContentView: View {
         let decorated =
             lifecycle
             .overlay {
-                CommandPaletteOverlay(
-                    isPresented: $isCommandPaletteOpen,
-                    actions: commandPaletteActions
-                )
-            }
-            .overlay {
                 if let confirmation = pendingToolConfirmation {
                     toolConfirmationOverlay(confirmation)
                 }
@@ -332,7 +324,6 @@ struct ContentView: View {
                     undoPanelOverlay
                 }
             }
-            .commandPaletteShortcut(isPresented: $isCommandPaletteOpen)
             .fileImporter(
                 isPresented: $isShowingAgentDirectoryPicker,
                 allowedContentTypes: [.folder],
@@ -360,152 +351,9 @@ struct ContentView: View {
             // Center - main chat area
             detailView
                 .frame(minWidth: 400)
-            
-            // Right sidebar - configuration (optional)
-            if isShowingRightSidebar {
-                rightSidebarView
-                    .frame(minWidth: 280, idealWidth: 320, maxWidth: 400)
-            }
         }
     }
     
-    private var rightSidebarView: some View {
-        VStack(spacing: 0) {
-            // Header
-            HStack {
-                Text("Chat Configuration")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(theme.textPrimary)
-                
-                Spacer()
-                
-                Button {
-                    isShowingRightSidebar = false
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(theme.textSecondary)
-                        .frame(width: 24, height: 24)
-                        .background(
-                            theme.hoverBackground,
-                            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        )
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            
-            theme.divider.frame(height: 1)
-            
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    // System Prompt Section
-                    systemPromptSection
-                    
-                    theme.divider.frame(height: 1)
-                    
-                    // Thread Info Section
-                    threadInfoSection
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 16)
-            }
-            
-            Spacer()
-        }
-        .background(theme.sidebarBackground)
-    }
-    
-    private var systemPromptSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: "text.bubble")
-                    .font(.system(size: 14))
-                    .foregroundStyle(theme.accent)
-                
-                Text("System Prompt")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(theme.textPrimary)
-                
-                Spacer()
-                
-                if !systemPromptBinding.wrappedValue.isEmpty {
-                    Button {
-                        systemPromptBinding.wrappedValue = ""
-                    } label: {
-                        Image(systemName: "xmark.circle")
-                            .font(.system(size: 12))
-                            .foregroundStyle(theme.textTertiary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Clear system prompt")
-                }
-            }
-            
-            Text("Customize the AI's behavior for this conversation.")
-                .font(.system(size: 11))
-                .foregroundStyle(theme.textSecondary)
-                .lineLimit(2)
-            
-            TextEditor(text: systemPromptBinding)
-                .font(.system(size: 12))
-                .foregroundStyle(theme.textPrimary)
-                .scrollContentBackground(.hidden)
-                .background(theme.codeBackground)
-                .frame(minHeight: 120, maxHeight: 200)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(theme.codeBorder, lineWidth: 1)
-                )
-        }
-    }
-    
-    private var threadInfoSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: "info.circle")
-                    .font(.system(size: 14))
-                    .foregroundStyle(theme.accent)
-                
-                Text("Thread Info")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(theme.textPrimary)
-            }
-            
-            if let idx = selectedThreadIndex {
-                let thread = threads[idx]
-                
-                InfoRow(label: "Messages", value: "\(thread.messages.count)")
-                InfoRow(label: "Agent Mode", value: thread.agentEnabled ? "On" : "Off")
-                if let dir = thread.workingDirectory {
-                    InfoRow(label: "Working Dir", value: String(dir.prefix(30)) + (dir.count > 30 ? "..." : ""))
-                }
-                if let modelRef = thread.modelReference {
-                    InfoRow(label: "Model", value: modelRef)
-                }
-            } else {
-                Text("No chat selected")
-                    .font(.system(size: 12))
-                    .foregroundStyle(theme.textTertiary)
-            }
-        }
-    }
-    
-    private var systemPromptBinding: Binding<String> {
-        Binding(
-            get: {
-                guard let idx = selectedThreadIndex else { return "" }
-                return threads[idx].systemPrompt ?? ""
-            },
-            set: { newValue in
-                guard let idx = selectedThreadIndex else { return }
-                threads[idx].systemPrompt = newValue.isEmpty ? nil : newValue
-            }
-        )
-    }
-
     private var sidebarView: some View {
         VStack(spacing: 0) {
             // Search bar at the top
@@ -639,16 +487,6 @@ struct ContentView: View {
                 .help("Check for Updates")
 
                 Spacer()
-
-                Button {
-                    isShowingRightSidebar.toggle()
-                } label: {
-                    Image(systemName: "sidebar.right")
-                        .font(.system(size: 14))
-                        .foregroundStyle(isShowingRightSidebar ? theme.accent : theme.textSecondary)
-                }
-                .buttonStyle(.plain)
-                .help("Toggle Configuration Sidebar")
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -818,233 +656,6 @@ struct ContentView: View {
         } onShowUndo: {
             isShowingUndoPanel = true
         }
-    }
-
-    // MARK: - Command Palette Actions
-
-    private var commandPaletteActions: [CommandAction] {
-        var actions: [CommandAction] = []
-
-        // New Chat
-        actions.append(
-            CommandAction(
-                title: "New Chat",
-                subtitle: "Start a fresh conversation",
-                icon: "square.and.pencil",
-                shortcut: "N"
-            ) {
-                createThread()
-                toastManager.show(.success("New chat created", icon: "square.and.pencil"))
-            })
-
-        // Current chat actions (if a thread is selected)
-        if let threadID = selectedThreadID,
-            let thread = threads.first(where: { $0.id == threadID })
-        {
-            actions.append(
-                CommandAction(
-                    title: "Export Current Chat",
-                    subtitle: "Save \"\(thread.title)\" as Markdown",
-                    icon: "doc.text",
-                    shortcut: "E"
-                ) {
-                    exportThreadToMarkdown(thread)
-                })
-
-            actions.append(
-                CommandAction(
-                    title: "Delete Current Chat",
-                    subtitle: "Remove \"\(thread.title)\"",
-                    icon: "trash",
-                    shortcut: "D"
-                ) {
-                    threadToDelete = thread
-                })
-        }
-
-        // Settings
-        actions.append(
-            CommandAction(
-                title: "Open Settings",
-                subtitle: "Configure API keys and theme",
-                icon: "gearshape",
-                shortcut: ","
-            ) {
-                isShowingSettings = true
-                toastManager.show(.info("Settings opened", icon: "gearshape"))
-            })
-
-        // Model picker
-        actions.append(
-            CommandAction(
-                title: "Change Model",
-                subtitle: selectedModelLabel,
-                icon: "cpu",
-                shortcut: "M"
-            ) {
-                NotificationCenter.default.post(name: .openModelPickerRequested, object: nil)
-                toastManager.show(.info("Model picker opened", icon: "cpu"))
-            })
-
-        // Fetch models
-        actions.append(
-            CommandAction(
-                title: "Fetch Models",
-                subtitle: "Refresh available models from providers",
-                icon: "arrow.clockwise",
-                shortcut: "R"
-            ) {
-                toastManager.show(.info("Fetching models...", icon: "arrow.clockwise"))
-                Task { await fetchModels() }
-            })
-
-        // Check for Updates
-        actions.append(
-            CommandAction(
-                title: "Check for Updates",
-                subtitle: "Check for a new version of Humlex",
-                icon: "arrow.triangle.2.circlepath",
-                shortcut: "U"
-            ) {
-                appUpdater.checkForUpdates()
-            })
-
-        // Theme picker - shows theme options when searched
-        actions.append(
-            CommandAction(
-                title: "Theme: System",
-                subtitle: themeManager.current.id == "system"
-                    ? "Currently active" : "Use macOS appearance",
-                icon: "circle.lefthalf.filled"
-            ) {
-                themeManager.select(.system)
-                toastManager.show(
-                    .success("Switched to System theme", icon: "circle.lefthalf.filled"))
-            })
-
-        actions.append(
-            CommandAction(
-                title: "Theme: Tokyo Night",
-                subtitle: themeManager.current.id == "tokyo-night"
-                    ? "Currently active" : "Dark theme inspired by Tokyo",
-                icon: "moon.stars"
-            ) {
-                themeManager.select(.tokyoNight)
-                toastManager.show(.success("Switched to Tokyo Night", icon: "moon.stars"))
-            })
-
-        actions.append(
-            CommandAction(
-                title: "Theme: Tokyo Night Storm",
-                subtitle: themeManager.current.id == "tokyo-night-storm"
-                    ? "Currently active" : "Lighter Tokyo Night variant",
-                icon: "cloud.moon"
-            ) {
-                themeManager.select(.tokyoNightStorm)
-                toastManager.show(.success("Switched to Tokyo Night Storm", icon: "cloud.moon"))
-            })
-
-        actions.append(
-            CommandAction(
-                title: "Theme: Catppuccin Mocha",
-                subtitle: themeManager.current.id == "catppuccin-mocha"
-                    ? "Currently active" : "Warm pastel dark theme",
-                icon: "cup.and.saucer"
-            ) {
-                themeManager.select(.catppuccinMocha)
-                toastManager.show(.success("Switched to Catppuccin Mocha", icon: "cup.and.saucer"))
-            })
-
-        actions.append(
-            CommandAction(
-                title: "Theme: GitHub Dark",
-                subtitle: themeManager.current.id == "github-dark"
-                    ? "Currently active" : "Clean GitHub-style dark theme",
-                icon: "chevron.left.forwardslash.chevron.right"
-            ) {
-                themeManager.select(.githubDark)
-                toastManager.show(
-                    .success(
-                        "Switched to GitHub Dark", icon: "chevron.left.forwardslash.chevron.right"))
-            })
-
-        // Stop streaming
-        if streamingTask != nil {
-            actions.insert(
-                CommandAction(
-                    title: "Stop Generation",
-                    subtitle: "Cancel the current response",
-                    icon: "stop.circle",
-                    shortcut: "."
-                ) {
-                    stopStreaming()
-                    toastManager.show(.info("Generation stopped", icon: "stop.circle"))
-                }, at: 0)
-        }
-
-        // Copy last response
-        if let threadID = selectedThreadID,
-            let thread = threads.first(where: { $0.id == threadID }),
-            let lastAssistant = thread.messages.last(where: { $0.role == .assistant })
-        {
-            actions.append(
-                CommandAction(
-                    title: "Copy Last Response",
-                    subtitle: "Copy assistant's last message",
-                    icon: "doc.on.doc"
-                ) {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(lastAssistant.text, forType: .string)
-                    toastManager.show(.success("Copied to clipboard", icon: "doc.on.doc"))
-                })
-        }
-
-        // Clear all chats
-        actions.append(
-            CommandAction(
-                title: "Clear All Chats",
-                subtitle: "Remove all conversations",
-                icon: "trash.fill"
-            ) {
-                clearAllChats(showToast: true)
-            })
-
-        // Agent mode toggle
-        if let threadID = selectedThreadID,
-            let thread = threads.first(where: { $0.id == threadID })
-        {
-            if thread.agentEnabled {
-                actions.append(
-                    CommandAction(
-                        title: "Disable Agent Mode",
-                        subtitle: "Turn off built-in coding tools",
-                        icon: "terminal"
-                    ) {
-                        if let idx = threads.firstIndex(where: { $0.id == threadID }) {
-                            threads[idx].agentEnabled = false
-                            toastManager.show(.info("Agent mode disabled", icon: "terminal"))
-                        }
-                    })
-            } else {
-                actions.append(
-                    CommandAction(
-                        title: "Enable Agent Mode",
-                        subtitle: "Type /agent <path> or pick a folder",
-                        icon: "terminal"
-                    ) {
-                        if let idx = threads.firstIndex(where: { $0.id == threadID }) {
-                            if threads[idx].workingDirectory != nil {
-                                threads[idx].agentEnabled = true
-                                toastManager.show(.success("Agent mode ON", icon: "terminal"))
-                            } else {
-                                isShowingAgentDirectoryPicker = true
-                            }
-                        }
-                    })
-            }
-        }
-
-        return actions
     }
 
     private var settingsSheet: some View {
