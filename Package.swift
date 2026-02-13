@@ -18,7 +18,7 @@ let package = Package(
             path: ".",
             exclude: [
                 "run.sh", "build-dmg.sh", "Assets.xcassets", "README.md", ".github", "docs",
-                "website", "AGENTS.md",
+                "website", "AGENTS.md", "gateway",
             ],
             resources: [
                 .process("assets")
