@@ -20,6 +20,7 @@ use sdk::gemini::GeminiProvider;
 use sdk::kimi::KimiProvider;
 use sdk::openai::OpenAiProvider;
 use sdk::retry::RetryPolicy;
+use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
 #[tokio::main]
@@ -128,6 +129,10 @@ async fn main() {
         vertex_ai_provider,
     ));
     let state = AppState::new(registry, Arc::new(config.clone()));
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
 
     let app = Router::new()
         .route("/", get(root))
@@ -138,7 +143,8 @@ async fn main() {
         .route("/v1/models", get(list_models))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/responses", post(responses))
-        .with_state(state);
+        .with_state(state)
+        .layer(cors);
 
     let addr = config.bind_addr();
     info!(%addr, "gateway listening");
