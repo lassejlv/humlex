@@ -8,11 +8,15 @@ pub struct Config {
     pub anthropic_base_url: String,
     pub gemini_base_url: String,
     pub kimi_base_url: String,
+    pub openrouter_base_url: String,
+    pub vercel_ai_gateway_base_url: String,
     pub gateway_api_keys: Vec<String>,
     pub openai_api_key: Option<String>,
     pub anthropic_api_key: Option<String>,
     pub gemini_api_key: Option<String>,
     pub kimi_api_key: Option<String>,
+    pub openrouter_api_key: Option<String>,
+    pub vercel_ai_gateway_api_key: Option<String>,
     pub upstream_max_retries: u32,
     pub upstream_retry_base_delay_ms: u64,
     pub request_timeout_secs: u64,
@@ -45,6 +49,16 @@ impl Config {
 
         let kimi_base_url = env::var("KIMI_BASE_URL")
             .unwrap_or_else(|_| "https://api.kimi.com/coding/v1".to_string())
+            .trim_end_matches('/')
+            .to_string();
+
+        let openrouter_base_url = env::var("OPENROUTER_BASE_URL")
+            .unwrap_or_else(|_| "https://openrouter.ai/api/v1".to_string())
+            .trim_end_matches('/')
+            .to_string();
+
+        let vercel_ai_gateway_base_url = env::var("VERCEL_AI_GATEWAY_BASE_URL")
+            .unwrap_or_else(|_| "https://ai-gateway.vercel.sh/v1".to_string())
             .trim_end_matches('/')
             .to_string();
 
@@ -81,6 +95,16 @@ impl Config {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
 
+        let openrouter_api_key = env::var("OPENROUTER_API_KEY")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
+        let vercel_ai_gateway_api_key = env::var("VERCEL_AI_GATEWAY_API_KEY")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
         let upstream_max_retries = env::var("UPSTREAM_MAX_RETRIES")
             .ok()
             .and_then(|value| value.parse::<u32>().ok())
@@ -98,11 +122,15 @@ impl Config {
             anthropic_base_url,
             gemini_base_url,
             kimi_base_url,
+            openrouter_base_url,
+            vercel_ai_gateway_base_url,
             gateway_api_keys,
             openai_api_key,
             anthropic_api_key,
             gemini_api_key,
             kimi_api_key,
+            openrouter_api_key,
+            vercel_ai_gateway_api_key,
             upstream_max_retries,
             upstream_retry_base_delay_ms,
             request_timeout_secs,

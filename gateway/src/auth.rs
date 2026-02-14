@@ -57,6 +57,8 @@ pub fn resolve_provider_api_key(
         ProviderKind::Anthropic => config.anthropic_api_key.clone(),
         ProviderKind::Gemini => config.gemini_api_key.clone(),
         ProviderKind::Kimi => config.kimi_api_key.clone(),
+        ProviderKind::OpenRouter => config.openrouter_api_key.clone(),
+        ProviderKind::VercelAiGateway => config.vercel_ai_gateway_api_key.clone(),
     };
 
     Ok(configured.unwrap_or_else(|| token.to_string()))

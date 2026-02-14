@@ -8,6 +8,8 @@ pub enum ProviderKind {
     Anthropic,
     Gemini,
     Kimi,
+    OpenRouter,
+    VercelAiGateway,
 }
 
 impl ProviderKind {
@@ -26,6 +28,14 @@ impl ProviderKind {
 
         if let Some(stripped) = model.strip_prefix("kimi/") {
             return (Self::Kimi, stripped.to_string());
+        }
+
+        if let Some(stripped) = model.strip_prefix("openrouter/") {
+            return (Self::OpenRouter, stripped.to_string());
+        }
+
+        if let Some(stripped) = model.strip_prefix("vercel/") {
+            return (Self::VercelAiGateway, stripped.to_string());
         }
 
         let lower = model.to_ascii_lowercase();
@@ -51,6 +61,9 @@ impl ProviderKind {
             "anthropic" => Some(Self::Anthropic),
             "gemini" => Some(Self::Gemini),
             "kimi" => Some(Self::Kimi),
+            "openrouter" => Some(Self::OpenRouter),
+            "vercel" => Some(Self::VercelAiGateway),
+            "vercel-ai-gateway" => Some(Self::VercelAiGateway),
             _ => None,
         }
     }
@@ -62,6 +75,8 @@ pub struct ProviderRegistry {
     anthropic: Arc<dyn ProviderSdk>,
     gemini: Arc<dyn ProviderSdk>,
     kimi: Arc<dyn ProviderSdk>,
+    openrouter: Arc<dyn ProviderSdk>,
+    vercel_ai_gateway: Arc<dyn ProviderSdk>,
 }
 
 impl ProviderRegistry {
@@ -70,12 +85,16 @@ impl ProviderRegistry {
         anthropic: Arc<dyn ProviderSdk>,
         gemini: Arc<dyn ProviderSdk>,
         kimi: Arc<dyn ProviderSdk>,
+        openrouter: Arc<dyn ProviderSdk>,
+        vercel_ai_gateway: Arc<dyn ProviderSdk>,
     ) -> Self {
         Self {
             openai,
             anthropic,
             gemini,
             kimi,
+            openrouter,
+            vercel_ai_gateway,
         }
     }
 
@@ -85,6 +104,8 @@ impl ProviderRegistry {
             ProviderKind::Anthropic => Arc::clone(&self.anthropic),
             ProviderKind::Gemini => Arc::clone(&self.gemini),
             ProviderKind::Kimi => Arc::clone(&self.kimi),
+            ProviderKind::OpenRouter => Arc::clone(&self.openrouter),
+            ProviderKind::VercelAiGateway => Arc::clone(&self.vercel_ai_gateway),
         }
     }
 
@@ -94,6 +115,11 @@ impl ProviderRegistry {
             (ProviderKind::Anthropic, Arc::clone(&self.anthropic)),
             (ProviderKind::Gemini, Arc::clone(&self.gemini)),
             (ProviderKind::Kimi, Arc::clone(&self.kimi)),
+            (ProviderKind::OpenRouter, Arc::clone(&self.openrouter)),
+            (
+                ProviderKind::VercelAiGateway,
+                Arc::clone(&self.vercel_ai_gateway),
+            ),
         ]
     }
 }

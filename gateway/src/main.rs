@@ -56,8 +56,18 @@ async fn main() {
         retry_policy,
     ));
     let kimi_provider = Arc::new(KimiProvider::new(
-        openai_client,
+        openai_client.clone(),
         config.kimi_base_url.clone(),
+        retry_policy,
+    ));
+    let openrouter_provider = Arc::new(OpenAiProvider::new(
+        openai_client.clone(),
+        config.openrouter_base_url.clone(),
+        retry_policy,
+    ));
+    let vercel_ai_gateway_provider = Arc::new(OpenAiProvider::new(
+        openai_client,
+        config.vercel_ai_gateway_base_url.clone(),
         retry_policy,
     ));
     let registry = Arc::new(ProviderRegistry::new(
@@ -65,6 +75,8 @@ async fn main() {
         anthropic_provider,
         gemini_provider,
         kimi_provider,
+        openrouter_provider,
+        vercel_ai_gateway_provider,
     ));
     let state = AppState::new(registry, Arc::new(config.clone()));
 

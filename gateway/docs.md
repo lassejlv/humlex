@@ -1,6 +1,6 @@
 # AI Gateway Docs
 
-Small OpenAI-compatible gateway with provider adapters for OpenAI, Anthropic, Gemini, and Kimi.
+Small OpenAI-compatible gateway with provider adapters for OpenAI, Anthropic, Gemini, Kimi, OpenRouter, and Vercel AI Gateway.
 
 ## Run
 
@@ -22,7 +22,8 @@ By default, provider keys come from incoming bearer auth:
 `Authorization: Bearer <provider-api-key>`
 
 If `GATEWAY_API_KEYS` is set, bearer auth is treated as a gateway key instead. In that mode,
-configure provider API keys with `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, and `KIMI_API_KEY`.
+configure provider API keys with `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `KIMI_API_KEY`,
+`OPENROUTER_API_KEY`, and `VERCEL_AI_GATEWAY_API_KEY`.
 
 ## Provider Routing
 
@@ -31,6 +32,8 @@ configure provider API keys with `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_
 - `claude*` -> Anthropic
 - `gemini*` -> Gemini
 - `kimi*` -> Kimi
+- `openrouter/<model>` -> OpenRouter
+- `vercel/<model>` -> Vercel AI Gateway
 - everything else -> OpenAI
 
 You can also force provider with model prefixes:
@@ -39,11 +42,13 @@ You can also force provider with model prefixes:
 - `anthropic/<model>`
 - `gemini/<model>`
 - `kimi/<model>`
+- `openrouter/<model>`
+- `vercel/<model>`
 
 ## Models Endpoint
 
 - `GET /v1/models` aggregates all providers
-- `GET /v1/models?provider=openai|anthropic|gemini|kimi` fetches a single provider
+- `GET /v1/models?provider=openai|anthropic|gemini|kimi|openrouter|vercel` fetches a single provider
 
 ## Kimi Notes
 
@@ -106,8 +111,12 @@ curl http://localhost:3000/v1/chat/completions \
 - `ANTHROPIC_BASE_URL` (default: `https://api.anthropic.com`)
 - `GEMINI_BASE_URL` (default: `https://generativelanguage.googleapis.com/v1beta/openai`)
 - `KIMI_BASE_URL` (default: `https://api.kimi.com/coding/v1`)
+- `OPENROUTER_BASE_URL` (default: `https://openrouter.ai/api/v1`)
+- `VERCEL_AI_GATEWAY_BASE_URL` (default: `https://ai-gateway.vercel.sh/v1`)
 - `GATEWAY_API_KEYS` (optional comma-separated list)
 - `OPENAI_API_KEY` (optional)
 - `ANTHROPIC_API_KEY` (optional)
 - `GEMINI_API_KEY` (optional)
 - `KIMI_API_KEY` (optional)
+- `OPENROUTER_API_KEY` (optional)
+- `VERCEL_AI_GATEWAY_API_KEY` (optional)

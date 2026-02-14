@@ -44,7 +44,8 @@ pub async fn list_models(
     if let Some(provider_name) = query.provider.as_deref() {
         let kind = ProviderKind::parse(provider_name).ok_or_else(|| {
             GatewayError::BadRequest(
-                "provider must be one of: openai, anthropic, gemini, kimi".to_string(),
+                "provider must be one of: openai, anthropic, gemini, kimi, openrouter, vercel"
+                    .to_string(),
             )
         })?;
 
