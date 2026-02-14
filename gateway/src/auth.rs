@@ -59,6 +59,14 @@ pub fn resolve_provider_api_key(
         ProviderKind::Kimi => config.kimi_api_key.clone(),
         ProviderKind::OpenRouter => config.openrouter_api_key.clone(),
         ProviderKind::VercelAiGateway => config.vercel_ai_gateway_api_key.clone(),
+        ProviderKind::Groq => config.groq_api_key.clone(),
+        ProviderKind::DeepSeek => config.deepseek_api_key.clone(),
+        ProviderKind::XAi => config.xai_api_key.clone(),
+        ProviderKind::Mistral => config.mistral_api_key.clone(),
+        ProviderKind::Cohere => config.cohere_api_key.clone(),
+        ProviderKind::AzureOpenAi => config.azure_openai_api_key.clone(),
+        ProviderKind::AwsBedrock => config.aws_bedrock_api_key.clone(),
+        ProviderKind::VertexAi => config.vertex_ai_api_key.clone(),
     };
 
     Ok(configured.unwrap_or_else(|| token.to_string()))

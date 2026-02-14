@@ -11,10 +11,11 @@ use std::time::Duration;
 use axum::Router;
 use axum::routing::{get, post};
 use config::Config;
-use http::handlers::{chat_completions, healthz, list_models, responses, root};
+use http::handlers::{chat_completions, doc, healthz, list_models, providers, responses, root};
 use http::state::AppState;
 use providers::registry::ProviderRegistry;
 use sdk::anthropic::AnthropicProvider;
+use sdk::azure_openai::AzureOpenAiProvider;
 use sdk::gemini::GeminiProvider;
 use sdk::kimi::KimiProvider;
 use sdk::openai::OpenAiProvider;
@@ -66,8 +67,48 @@ async fn main() {
         retry_policy,
     ));
     let vercel_ai_gateway_provider = Arc::new(OpenAiProvider::new(
-        openai_client,
+        openai_client.clone(),
         config.vercel_ai_gateway_base_url.clone(),
+        retry_policy,
+    ));
+    let groq_provider = Arc::new(OpenAiProvider::new(
+        openai_client.clone(),
+        config.groq_base_url.clone(),
+        retry_policy,
+    ));
+    let deepseek_provider = Arc::new(OpenAiProvider::new(
+        openai_client.clone(),
+        config.deepseek_base_url.clone(),
+        retry_policy,
+    ));
+    let xai_provider = Arc::new(OpenAiProvider::new(
+        openai_client.clone(),
+        config.xai_base_url.clone(),
+        retry_policy,
+    ));
+    let mistral_provider = Arc::new(OpenAiProvider::new(
+        openai_client.clone(),
+        config.mistral_base_url.clone(),
+        retry_policy,
+    ));
+    let cohere_provider = Arc::new(OpenAiProvider::new(
+        openai_client.clone(),
+        config.cohere_base_url.clone(),
+        retry_policy,
+    ));
+    let azure_openai_provider = Arc::new(AzureOpenAiProvider::new(
+        openai_client.clone(),
+        config.azure_openai_base_url.clone(),
+        retry_policy,
+    ));
+    let aws_bedrock_provider = Arc::new(OpenAiProvider::new(
+        openai_client.clone(),
+        config.aws_bedrock_base_url.clone(),
+        retry_policy,
+    ));
+    let vertex_ai_provider = Arc::new(OpenAiProvider::new(
+        openai_client,
+        config.vertex_ai_base_url.clone(),
         retry_policy,
     ));
     let registry = Arc::new(ProviderRegistry::new(
@@ -77,11 +118,21 @@ async fn main() {
         kimi_provider,
         openrouter_provider,
         vercel_ai_gateway_provider,
+        groq_provider,
+        deepseek_provider,
+        xai_provider,
+        mistral_provider,
+        cohere_provider,
+        azure_openai_provider,
+        aws_bedrock_provider,
+        vertex_ai_provider,
     ));
     let state = AppState::new(registry, Arc::new(config.clone()));
 
     let app = Router::new()
         .route("/", get(root))
+        .route("/doc", get(doc))
+        .route("/providers", get(providers))
         .route("/status", get(healthz))
         .route("/healthz", get(healthz))
         .route("/v1/models", get(list_models))

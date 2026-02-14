@@ -33,6 +33,171 @@ pub async fn healthz() -> Json<Value> {
     Json(json!({ "status": "ok" }))
 }
 
+pub async fn providers() -> Json<Value> {
+    let data = ProviderKind::all_kinds()
+        .into_iter()
+        .map(|kind| {
+            json!({
+                "id": kind.id(),
+                "object": "provider",
+                "model_prefix": format!("{}/", kind.id()),
+                "openai_compatible": true,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Json(json!({
+        "object": "list",
+        "data": data,
+    }))
+}
+
+pub async fn doc() -> Json<Value> {
+    Json(json!({
+        "openapi": "3.1.0",
+        "info": {
+            "title": "Humlex AI Gateway API",
+            "version": "0.1.0",
+            "description": "OpenAI-compatible AI gateway with multi-provider routing and streaming support."
+        },
+        "servers": [
+            { "url": "/" }
+        ],
+        "paths": {
+            "/healthz": {
+                "get": {
+                    "summary": "Health check",
+                    "responses": {
+                        "200": {
+                            "description": "OK"
+                        }
+                    }
+                }
+            },
+            "/providers": {
+                "get": {
+                    "summary": "List supported providers",
+                    "responses": {
+                        "200": {
+                            "description": "Provider list"
+                        }
+                    }
+                }
+            },
+            "/v1/models": {
+                "get": {
+                    "summary": "List models",
+                    "parameters": [
+                        {
+                            "name": "provider",
+                            "in": "query",
+                            "required": false,
+                            "schema": {
+                                "type": "string",
+                                "enum": [
+                                    "openai",
+                                    "anthropic",
+                                    "gemini",
+                                    "kimi",
+                                    "openrouter",
+                                    "vercel",
+                                    "groq",
+                                    "deepseek",
+                                    "xai",
+                                    "mistral",
+                                    "cohere",
+                                    "azure",
+                                    "bedrock",
+                                    "vertex"
+                                ]
+                            }
+                        }
+                    ],
+                    "security": [{"bearerAuth": []}],
+                    "responses": {
+                        "200": {
+                            "description": "Model list"
+                        },
+                        "401": {"description": "Unauthorized"}
+                    }
+                }
+            },
+            "/v1/chat/completions": {
+                "post": {
+                    "summary": "Create chat completion",
+                    "security": [{"bearerAuth": []}],
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": ["model", "messages"],
+                                    "properties": {
+                                        "model": {"type": "string"},
+                                        "stream": {"type": "boolean"},
+                                        "messages": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "role": {"type": "string"},
+                                                    "content": {}
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {"description": "Completion response or SSE stream"},
+                        "400": {"description": "Bad request"},
+                        "401": {"description": "Unauthorized"}
+                    }
+                }
+            },
+            "/v1/responses": {
+                "post": {
+                    "summary": "Create response",
+                    "security": [{"bearerAuth": []}],
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": ["model"],
+                                    "properties": {
+                                        "model": {"type": "string"},
+                                        "stream": {"type": "boolean"},
+                                        "input": {},
+                                        "messages": {"type": "array"}
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {"description": "Response object or SSE stream"},
+                        "400": {"description": "Bad request"},
+                        "401": {"description": "Unauthorized"}
+                    }
+                }
+            }
+        },
+        "components": {
+            "securitySchemes": {
+                "bearerAuth": {
+                    "type": "http",
+                    "scheme": "bearer"
+                }
+            }
+        }
+    }))
+}
+
 pub async fn list_models(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -44,8 +209,7 @@ pub async fn list_models(
     if let Some(provider_name) = query.provider.as_deref() {
         let kind = ProviderKind::parse(provider_name).ok_or_else(|| {
             GatewayError::BadRequest(
-                "provider must be one of: openai, anthropic, gemini, kimi, openrouter, vercel"
-                    .to_string(),
+                "provider must be one of: openai, anthropic, gemini, kimi, openrouter, vercel, groq, deepseek, xai, mistral, cohere, azure, bedrock, vertex".to_string(),
             )
         })?;
 

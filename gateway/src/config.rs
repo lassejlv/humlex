@@ -10,6 +10,14 @@ pub struct Config {
     pub kimi_base_url: String,
     pub openrouter_base_url: String,
     pub vercel_ai_gateway_base_url: String,
+    pub groq_base_url: String,
+    pub deepseek_base_url: String,
+    pub xai_base_url: String,
+    pub mistral_base_url: String,
+    pub cohere_base_url: String,
+    pub azure_openai_base_url: String,
+    pub aws_bedrock_base_url: String,
+    pub vertex_ai_base_url: String,
     pub gateway_api_keys: Vec<String>,
     pub openai_api_key: Option<String>,
     pub anthropic_api_key: Option<String>,
@@ -17,6 +25,14 @@ pub struct Config {
     pub kimi_api_key: Option<String>,
     pub openrouter_api_key: Option<String>,
     pub vercel_ai_gateway_api_key: Option<String>,
+    pub groq_api_key: Option<String>,
+    pub deepseek_api_key: Option<String>,
+    pub xai_api_key: Option<String>,
+    pub mistral_api_key: Option<String>,
+    pub cohere_api_key: Option<String>,
+    pub azure_openai_api_key: Option<String>,
+    pub aws_bedrock_api_key: Option<String>,
+    pub vertex_ai_api_key: Option<String>,
     pub upstream_max_retries: u32,
     pub upstream_retry_base_delay_ms: u64,
     pub request_timeout_secs: u64,
@@ -59,6 +75,50 @@ impl Config {
 
         let vercel_ai_gateway_base_url = env::var("VERCEL_AI_GATEWAY_BASE_URL")
             .unwrap_or_else(|_| "https://ai-gateway.vercel.sh/v1".to_string())
+            .trim_end_matches('/')
+            .to_string();
+
+        let groq_base_url = env::var("GROQ_BASE_URL")
+            .unwrap_or_else(|_| "https://api.groq.com/openai/v1".to_string())
+            .trim_end_matches('/')
+            .to_string();
+
+        let deepseek_base_url = env::var("DEEPSEEK_BASE_URL")
+            .unwrap_or_else(|_| "https://api.deepseek.com/v1".to_string())
+            .trim_end_matches('/')
+            .to_string();
+
+        let xai_base_url = env::var("XAI_BASE_URL")
+            .unwrap_or_else(|_| "https://api.x.ai/v1".to_string())
+            .trim_end_matches('/')
+            .to_string();
+
+        let mistral_base_url = env::var("MISTRAL_BASE_URL")
+            .unwrap_or_else(|_| "https://api.mistral.ai/v1".to_string())
+            .trim_end_matches('/')
+            .to_string();
+
+        let cohere_base_url = env::var("COHERE_BASE_URL")
+            .unwrap_or_else(|_| "https://api.cohere.com/compatibility/v1".to_string())
+            .trim_end_matches('/')
+            .to_string();
+
+        let azure_openai_base_url = env::var("AZURE_OPENAI_BASE_URL")
+            .unwrap_or_else(|_| "https://example-resource.openai.azure.com/openai/v1".to_string())
+            .trim_end_matches('/')
+            .to_string();
+
+        let aws_bedrock_base_url = env::var("AWS_BEDROCK_BASE_URL")
+            .unwrap_or_else(|_| {
+                "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1".to_string()
+            })
+            .trim_end_matches('/')
+            .to_string();
+
+        let vertex_ai_base_url = env::var("VERTEX_AI_BASE_URL")
+            .unwrap_or_else(|_| {
+                "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT/locations/us-central1/endpoints/openapi".to_string()
+            })
             .trim_end_matches('/')
             .to_string();
 
@@ -105,6 +165,46 @@ impl Config {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
 
+        let groq_api_key = env::var("GROQ_API_KEY")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
+        let deepseek_api_key = env::var("DEEPSEEK_API_KEY")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
+        let xai_api_key = env::var("XAI_API_KEY")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
+        let mistral_api_key = env::var("MISTRAL_API_KEY")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
+        let cohere_api_key = env::var("COHERE_API_KEY")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
+        let azure_openai_api_key = env::var("AZURE_OPENAI_API_KEY")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
+        let aws_bedrock_api_key = env::var("AWS_BEDROCK_API_KEY")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
+        let vertex_ai_api_key = env::var("VERTEX_AI_API_KEY")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
         let upstream_max_retries = env::var("UPSTREAM_MAX_RETRIES")
             .ok()
             .and_then(|value| value.parse::<u32>().ok())
@@ -124,6 +224,14 @@ impl Config {
             kimi_base_url,
             openrouter_base_url,
             vercel_ai_gateway_base_url,
+            groq_base_url,
+            deepseek_base_url,
+            xai_base_url,
+            mistral_base_url,
+            cohere_base_url,
+            azure_openai_base_url,
+            aws_bedrock_base_url,
+            vertex_ai_base_url,
             gateway_api_keys,
             openai_api_key,
             anthropic_api_key,
@@ -131,6 +239,14 @@ impl Config {
             kimi_api_key,
             openrouter_api_key,
             vercel_ai_gateway_api_key,
+            groq_api_key,
+            deepseek_api_key,
+            xai_api_key,
+            mistral_api_key,
+            cohere_api_key,
+            azure_openai_api_key,
+            aws_bedrock_api_key,
+            vertex_ai_api_key,
             upstream_max_retries,
             upstream_retry_base_delay_ms,
             request_timeout_secs,

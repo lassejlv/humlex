@@ -1,4 +1,5 @@
 pub mod anthropic;
+pub mod azure_openai;
 pub mod gemini;
 pub mod kimi;
 pub mod openai;
