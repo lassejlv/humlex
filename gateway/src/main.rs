@@ -12,6 +12,7 @@ use axum::Router;
 use axum::routing::{get, post};
 use config::Config;
 use http::handlers::{chat_completions, doc, healthz, list_models, providers, responses, root};
+use http::playground::playground;
 use http::state::AppState;
 use providers::registry::ProviderRegistry;
 use sdk::anthropic::AnthropicProvider;
@@ -136,6 +137,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(root))
+        .route("/playground", get(playground))
         .route("/doc", get(doc))
         .route("/providers", get(providers))
         .route("/status", get(healthz))

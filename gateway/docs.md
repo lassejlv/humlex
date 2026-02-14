@@ -14,6 +14,7 @@ Default bind: `0.0.0.0:3000`
 
 - `GET /healthz`
 - `GET /doc`
+- `GET /playground`
 - `GET /providers`
 - `GET /v1/models`
 - `POST /v1/chat/completions`
@@ -21,6 +22,7 @@ Default bind: `0.0.0.0:3000`
 
 `GET /providers` returns all gateway-supported providers and model prefixes.
 `GET /doc` returns OpenAPI JSON.
+`GET /playground` serves a small browser test UI.
 
 By default, provider keys come from incoming bearer auth:
 

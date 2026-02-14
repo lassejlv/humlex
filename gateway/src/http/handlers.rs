@@ -25,7 +25,8 @@ pub struct ModelsQuery {
 pub async fn root() -> Json<Value> {
     Json(json!({
         "name": "gateway",
-        "status": "ok"
+        "status": "ok",
+        "playground": "/playground"
     }))
 }
 
