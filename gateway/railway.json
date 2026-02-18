@@ -4,6 +4,6 @@
     "builder": "RAILPACK"
   },
   "deploy": {
-    "sleepApplication": true
+    "sleepApplication": false
   }
 }
