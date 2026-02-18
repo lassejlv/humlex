@@ -37,7 +37,7 @@ final class ToastManager: ObservableObject {
 
     private var dismissTask: DispatchWorkItem?
 
-    private nonisolated init() {}
+    private init() {}
 
     func show(_ toast: Toast, duration: TimeInterval = 2.0) {
         dismissTask?.cancel()
@@ -66,7 +66,9 @@ final class ToastManager: ObservableObject {
 // MARK: - Environment key
 
 private struct ToastManagerKey: EnvironmentKey {
-    static let defaultValue = ToastManager.shared
+    static var defaultValue: ToastManager {
+        MainActor.assumeIsolated { ToastManager.shared }
+    }
 }
 
 extension EnvironmentValues {

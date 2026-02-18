@@ -1,6 +1,6 @@
 //
-//  AI_ChatApp.swift
-//  AI Chat
+//  HumlexApp.swift
+//  Humlex
 //
 //  Created by Lasse Vestergaard on 10/02/2026.
 //
@@ -14,7 +14,7 @@ extension Notification.Name {
 }
 
 @main
-struct AI_ChatApp: App {
+struct HumlexApp: App {
     @StateObject private var themeManager = ThemeManager.shared
     @StateObject private var toastManager = ToastManager.shared
     @StateObject private var appUpdater = AppUpdater()

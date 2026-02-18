@@ -15,9 +15,11 @@ struct ContentView: View {
         .readOnly.rawValue
     @AppStorage("experimental_claude_code_enabled") private var isClaudeCodeEnabled = false
     @AppStorage("experimental_codex_enabled") private var isCodexEnabled = false
+    @AppStorage("provider_ollama_enabled") private var isOllamaEnabled = true
     @AppStorage("auto_scroll_enabled") private var isAutoScrollEnabled = true
     @AppStorage("performance_mode_enabled") private var isPerformanceModeEnabled = true
-    @AppStorage("performance_visible_message_limit") private var performanceVisibleMessageLimit = 250
+    @AppStorage("performance_visible_message_limit") private var performanceVisibleMessageLimit =
+        250
     @AppStorage("debug_mode_enabled") private var isDebugModeEnabled = false
     @AppStorage("model_picker_in_toolbar_enabled") private var isModelPickerInToolbarEnabled = false
 
@@ -45,6 +47,13 @@ struct ContentView: View {
     @State private var draft: String = ""
     @State private var pendingAttachments: [Attachment] = []
     @State private var openAIAPIKey: String = ""
+    @AppStorage("openai_compatible_profiles_json") private var openAICompatibleProfilesJSON:
+        String =
+            "[]"
+    @AppStorage("openai_compatible_known_ids") private var openAICompatibleKnownIDsCSV: String = ""
+    @AppStorage("openai_compatible_base_url") private var legacyOpenAICompatibleBaseURL: String = ""
+    @State private var openAICompatibleProfiles: [OpenAICompatibleProfile] = []
+    @State private var openAICompatibleTokens: [String: String] = [:]
     @State private var anthropicAPIKey: String = ""
     @State private var openRouterAPIKey: String = ""
     @State private var fastRouterAPIKey: String = ""
@@ -343,6 +352,13 @@ struct ContentView: View {
             .onChange(of: kimiAPIKey) { _, newValue in
                 persistAPIKeyToKeychain(newValue, for: .kimi)
             }
+            .onChange(of: openAICompatibleProfiles) { _, _ in
+                persistOpenAICompatibleProfiles()
+                syncOpenAICompatibleTokensToKeychain()
+            }
+            .onChange(of: openAICompatibleTokens) { _, _ in
+                syncOpenAICompatibleTokensToKeychain()
+            }
             .onChange(of: selectedThreadID) { _, newValue in
                 selectedThreadIDRaw = newValue?.uuidString ?? ""
                 if let id = newValue, messageRenderLimitByThread[id] == nil {
@@ -350,7 +366,8 @@ struct ContentView: View {
                 }
             }
             .onChange(of: isPerformanceModeEnabled) { _, newValue in
-                guard newValue, let id = selectedThreadID, messageRenderLimitByThread[id] == nil else {
+                guard newValue, let id = selectedThreadID, messageRenderLimitByThread[id] == nil
+                else {
                     return
                 }
                 messageRenderLimitByThread[id] = resolvedVisibleMessageLimit
@@ -446,7 +463,7 @@ struct ContentView: View {
             }
         }
     }
-    
+
     private var sidebarView: some View {
         List(selection: $selectedThreadID) {
             Section("Chats") {
@@ -597,12 +614,15 @@ struct ContentView: View {
             Spacer(minLength: 0)
             Button {
                 guard let threadID = selectedThreadID else { return }
-                let currentLimit = messageRenderLimitByThread[threadID] ?? resolvedVisibleMessageLimit
+                let currentLimit =
+                    messageRenderLimitByThread[threadID] ?? resolvedVisibleMessageLimit
                 let nextLimit = min(currentMessages.count, currentLimit + messageRenderIncrement)
                 messageRenderLimitByThread[threadID] = nextLimit
             } label: {
-                Text("Load \(min(messageRenderIncrement, hiddenMessageCount)) older messages (\(hiddenMessageCount) hidden)")
-                    .font(.system(size: 12, weight: .medium))
+                Text(
+                    "Load \(min(messageRenderIncrement, hiddenMessageCount)) older messages (\(hiddenMessageCount) hidden)"
+                )
+                .font(.system(size: 12, weight: .medium))
             }
             .buttonStyle(.bordered)
             Spacer(minLength: 0)
@@ -675,6 +695,8 @@ struct ContentView: View {
     private var settingsSheet: some View {
         SettingsView(
             openAIAPIKey: $openAIAPIKey,
+            openAICompatibleProfiles: $openAICompatibleProfiles,
+            openAICompatibleTokens: $openAICompatibleTokens,
             anthropicAPIKey: $anthropicAPIKey,
             openRouterAPIKey: $openRouterAPIKey,
             fastRouterAPIKey: $fastRouterAPIKey,
@@ -771,6 +793,8 @@ struct ContentView: View {
         switch provider {
         case .openAI:
             return OpenAIAdapter()
+        case .openAICompatible:
+            return OpenAICompatibleAdapter(baseURLString: "")
         case .anthropic:
             return AnthropicAdapter()
         case .openRouter:
@@ -805,6 +829,8 @@ struct ContentView: View {
         switch provider {
         case .openAI:
             return openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .openAICompatible:
+            return ""
         case .anthropic:
             return anthropicAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         case .openRouter:
@@ -828,6 +854,8 @@ struct ContentView: View {
 
     private func isProviderEnabled(_ provider: AIProvider) -> Bool {
         switch provider {
+        case .ollama:
+            return isOllamaEnabled
         case .claudeCode:
             return isClaudeCodeEnabled
         case .openAICodex:
@@ -957,6 +985,11 @@ struct ContentView: View {
             if let key = try KeychainStore.loadString(for: AIProvider.kimi.keychainAccount) {
                 kimiAPIKey = key
             }
+
+            loadOpenAICompatibleProfiles()
+            migrateLegacyOpenAICompatibleConfigIfNeeded()
+            loadOpenAICompatibleTokensFromKeychain()
+            syncOpenAICompatibleTokensToKeychain()
         } catch {
             statusMessage = "Failed loading API keys: \(error.localizedDescription)"
         }
@@ -975,6 +1008,124 @@ struct ContentView: View {
         }
     }
 
+    private func openAICompatibleTokenKey(for profileID: String) -> String {
+        "openai_compatible_api_key_\(profileID)"
+    }
+
+    private func loadOpenAICompatibleProfiles() {
+        let data = Data(openAICompatibleProfilesJSON.utf8)
+        if let decoded = try? JSONDecoder().decode([OpenAICompatibleProfile].self, from: data) {
+            openAICompatibleProfiles = decoded
+        } else {
+            openAICompatibleProfiles = []
+        }
+    }
+
+    private func persistOpenAICompatibleProfiles() {
+        if let data = try? JSONEncoder().encode(openAICompatibleProfiles),
+            let json = String(data: data, encoding: .utf8)
+        {
+            openAICompatibleProfilesJSON = json
+        }
+    }
+
+    private func loadOpenAICompatibleTokensFromKeychain() {
+        var loaded: [String: String] = [:]
+        for profile in openAICompatibleProfiles {
+            let maybeToken = try? KeychainStore.loadString(
+                for: openAICompatibleTokenKey(for: profile.id))
+            if let token = maybeToken ?? nil, !token.isEmpty { loaded[profile.id] = token }
+        }
+        openAICompatibleTokens = loaded
+    }
+
+    private func syncOpenAICompatibleTokensToKeychain() {
+        let currentIDs = Set(openAICompatibleProfiles.map(\.id))
+        let knownIDs = Set(
+            openAICompatibleKnownIDsCSV.split(separator: ",").map { String($0) }.filter {
+                !$0.isEmpty
+            })
+
+        do {
+            for profileID in currentIDs {
+                let token = (openAICompatibleTokens[profileID] ?? "").trimmingCharacters(
+                    in: .whitespacesAndNewlines)
+                let key = openAICompatibleTokenKey(for: profileID)
+                if token.isEmpty {
+                    try KeychainStore.deleteValue(for: key)
+                } else {
+                    try KeychainStore.saveString(token, for: key)
+                }
+            }
+
+            for removedID in knownIDs.subtracting(currentIDs) {
+                try KeychainStore.deleteValue(for: openAICompatibleTokenKey(for: removedID))
+            }
+
+            openAICompatibleKnownIDsCSV = currentIDs.sorted().joined(separator: ",")
+        } catch {
+            statusMessage =
+                "Failed saving OpenAI Compatible token to Keychain: \(error.localizedDescription)"
+        }
+    }
+
+    private func migrateLegacyOpenAICompatibleConfigIfNeeded() {
+        guard openAICompatibleProfiles.isEmpty else { return }
+        let legacyEndpoint = legacyOpenAICompatibleBaseURL.trimmingCharacters(
+            in: .whitespacesAndNewlines)
+        let legacyToken =
+            (try? KeychainStore.loadString(for: AIProvider.openAICompatible.keychainAccount) ?? "")
+            ?? ""
+        let trimmedToken = legacyToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !legacyEndpoint.isEmpty || !trimmedToken.isEmpty else { return }
+
+        let profile = OpenAICompatibleProfile(name: "OpenAI Compatible", baseURL: legacyEndpoint)
+        openAICompatibleProfiles = [profile]
+        if !trimmedToken.isEmpty {
+            openAICompatibleTokens[profile.id] = trimmedToken
+        }
+        persistOpenAICompatibleProfiles()
+
+        do {
+            try KeychainStore.deleteValue(for: AIProvider.openAICompatible.keychainAccount)
+        } catch {
+            // ignore migration cleanup failures
+        }
+    }
+
+    private func openAICompatibleProfileContext(for model: LLMModel) -> (
+        profile: OpenAICompatibleProfile, token: String, modelID: String
+    )? {
+        guard let parsed = parseOpenAICompatibleModelID(model.modelID),
+            let profile = openAICompatibleProfiles.first(where: { $0.id == parsed.profileID })
+        else {
+            return nil
+        }
+        let token = (openAICompatibleTokens[profile.id] ?? "").trimmingCharacters(
+            in: .whitespacesAndNewlines)
+        guard !token.isEmpty else { return nil }
+        guard !profile.baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return (profile, token, parsed.modelID)
+    }
+
+    private func encodeOpenAICompatibleModelID(profileID: String, modelID: String) -> String {
+        "oac:\(profileID)::\(modelID)"
+    }
+
+    private func parseOpenAICompatibleModelID(_ encoded: String) -> (
+        profileID: String, modelID: String
+    )? {
+        guard encoded.hasPrefix("oac:") else { return nil }
+        let raw = String(encoded.dropFirst(4))
+        guard let separator = raw.range(of: "::") else { return nil }
+        let profileID = String(raw[..<separator.lowerBound])
+        let modelID = String(raw[separator.upperBound...])
+        guard !profileID.isEmpty, !modelID.isEmpty else { return nil }
+        return (profileID, modelID)
+    }
+
     @MainActor
     private func fetchModels() async {
         var collected: [LLMModel] = []
@@ -985,6 +1136,35 @@ struct ContentView: View {
 
         for provider in AIProvider.allCases {
             guard isProviderEnabled(provider) else { continue }
+            if provider == .openAICompatible {
+                for profile in openAICompatibleProfiles {
+                    let endpoint = profile.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let token = (openAICompatibleTokens[profile.id] ?? "").trimmingCharacters(
+                        in: .whitespacesAndNewlines)
+                    guard !endpoint.isEmpty, !token.isEmpty else { continue }
+
+                    do {
+                        let adapter = OpenAICompatibleAdapter(baseURLString: endpoint)
+                        let providerModels = try await adapter.fetchModels(apiKey: token)
+                        let prefixed = providerModels.map { model in
+                            LLMModel(
+                                provider: .openAICompatible,
+                                modelID: encodeOpenAICompatibleModelID(
+                                    profileID: profile.id,
+                                    modelID: model.modelID
+                                ),
+                                displayName: "\(profile.name) · \(model.displayName)"
+                            )
+                        }
+                        collected.append(contentsOf: prefixed)
+                    } catch {
+                        errors.append(
+                            "\(provider.rawValue) (\(profile.name)): \(error.localizedDescription)")
+                    }
+                }
+                continue
+            }
+
             let key = apiKey(for: provider)
             guard !key.isEmpty || !provider.requiresAPIKey else { continue }
 
@@ -1050,12 +1230,6 @@ struct ContentView: View {
         }
 
         let threadID = threads[idx].id
-        let key = apiKey(for: selectedModel.provider)
-
-        guard !key.isEmpty || !selectedModel.provider.requiresAPIKey else {
-            statusMessage = "Missing \(selectedModel.provider.rawValue) API key."
-            return
-        }
         guard !text.isEmpty || !pendingAttachments.isEmpty else { return }
 
         let messageAttachments = pendingAttachments
@@ -1077,12 +1251,32 @@ struct ContentView: View {
             persistChats(threads)
         }
 
-        await performStreamingLoop(
-            threadID: threadID,
-            threadIndex: idx,
-            model: selectedModel,
-            apiKey: key
-        )
+        if selectedModel.provider == .openAICompatible {
+            guard let context = openAICompatibleProfileContext(for: selectedModel) else {
+                statusMessage = "Missing OpenAI Compatible profile endpoint or bearer token."
+                return
+            }
+            await performStreamingLoop(
+                threadID: threadID,
+                threadIndex: idx,
+                model: selectedModel,
+                apiKey: context.token,
+                adapterOverride: OpenAICompatibleAdapter(baseURLString: context.profile.baseURL),
+                modelIDOverride: context.modelID
+            )
+        } else {
+            let key = apiKey(for: selectedModel.provider)
+            guard !key.isEmpty || !selectedModel.provider.requiresAPIKey else {
+                statusMessage = "Missing \(selectedModel.provider.rawValue) API key."
+                return
+            }
+            await performStreamingLoop(
+                threadID: threadID,
+                threadIndex: idx,
+                model: selectedModel,
+                apiKey: key
+            )
+        }
     }
 
     // MARK: - /agent Slash Command
@@ -1164,7 +1358,9 @@ struct ContentView: View {
         threadID: UUID,
         threadIndex: Int,
         model: LLMModel,
-        apiKey: String
+        apiKey: String,
+        adapterOverride: (any LLMProviderAdapter)? = nil,
+        modelIDOverride: String? = nil
     ) async {
         guard let idx = threads.firstIndex(where: { $0.id == threadID }) else { return }
         let isAgent = threads[idx].agentEnabled
@@ -1229,30 +1425,30 @@ struct ContentView: View {
 
             // Build system prompt: custom prompt + agent tools prompt (if applicable)
             var systemPromptParts: [String] = []
-            
+
             // Add custom system prompt from sidebar if set
             if let customPrompt = threads[currentIdx].systemPrompt, !customPrompt.isEmpty {
                 systemPromptParts.append(customPrompt)
             }
-            
+
             // Add agent system prompt (invisible in UI, only sent to LLM)
             if isAgent, let dir = workDir {
                 systemPromptParts.append(AgentTools.systemPrompt(workingDirectory: dir))
             } else if !isAgent && availableTools.contains(where: { $0.name == "fetch" }) {
                 // Add minimal fetch tool prompt for normal mode
                 let fetchPrompt = """
-                You have access to the fetch tool for making HTTP requests. Use it to retrieve data from APIs or websites.
-                
-                fetch parameters:
-                - url (required): The URL to fetch
-                - method: HTTP method (GET, POST, PUT, DELETE, PATCH) - defaults to GET
-                - headers: Optional HTTP headers as key-value pairs
-                - body: Request body for POST/PUT/PATCH
-                - timeout: Timeout in seconds (default 30, max 60)
-                """
+                    You have access to the fetch tool for making HTTP requests. Use it to retrieve data from APIs or websites.
+
+                    fetch parameters:
+                    - url (required): The URL to fetch
+                    - method: HTTP method (GET, POST, PUT, DELETE, PATCH) - defaults to GET
+                    - headers: Optional HTTP headers as key-value pairs
+                    - body: Request body for POST/PUT/PATCH
+                    - timeout: Timeout in seconds (default 30, max 60)
+                    """
                 systemPromptParts.append(fetchPrompt)
             }
-            
+
             // Insert combined system prompt at the beginning of history
             if !systemPromptParts.isEmpty {
                 let combinedSystemPrompt = systemPromptParts.joined(separator: "\n\n")
@@ -1274,9 +1470,12 @@ struct ContentView: View {
             streamingMessageID = assistantID
 
             do {
-                let result = try await adapter(for: model.provider).streamMessage(
+                let effectiveAdapter = adapterOverride ?? adapter(for: model.provider)
+                let effectiveModelID = modelIDOverride ?? model.modelID
+
+                let result = try await effectiveAdapter.streamMessage(
                     history: history,
-                    modelID: model.modelID,
+                    modelID: effectiveModelID,
                     apiKey: apiKey,
                     tools: availableTools
                 ) { event in

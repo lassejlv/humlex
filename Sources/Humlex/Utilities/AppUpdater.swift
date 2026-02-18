@@ -1,6 +1,6 @@
+import Combine
 import Foundation
 import Sparkle
-import Combine
 
 /// A lightweight wrapper around Sparkle's SPUStandardUpdaterController
 /// for programmatic use in SwiftUI (no XIB/storyboard needed).
@@ -51,12 +51,21 @@ final class AppUpdater: ObservableObject {
 
         delegateProxy.onDidAbortWithError = { [weak self] error in
             self?.statusUpdates?.clearPersistent(key: "updater_check")
-            self?.statusUpdates?.post(
-                message: "Update check failed: \(error.localizedDescription)",
-                source: "Updater",
-                level: .error,
-                duration: 8
-            )
+            if self?.isNoUpdateAbort(error) == true {
+                self?.statusUpdates?.post(
+                    message: "App is up to date.",
+                    source: "Updater",
+                    level: .info,
+                    duration: 4
+                )
+            } else {
+                self?.statusUpdates?.post(
+                    message: "Update check failed: \(error.localizedDescription)",
+                    source: "Updater",
+                    level: .error,
+                    duration: 8
+                )
+            }
         }
 
         updaterController.startUpdater()
@@ -82,7 +91,8 @@ final class AppUpdater: ObservableObject {
 
         performBackgroundCheck()
 
-        let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+        let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) {
+            [weak self] _ in
             Task { @MainActor in
                 self?.performBackgroundCheck()
             }
@@ -100,6 +110,32 @@ final class AppUpdater: ObservableObject {
             level: .info
         )
         updaterController.updater.checkForUpdatesInBackground()
+    }
+
+    private func isNoUpdateAbort(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        let description = error.localizedDescription.lowercased()
+
+        // Sparkle may sometimes surface "no update" as an abort callback.
+        if description.contains("up to date")
+            || description.contains("no update")
+            || description.contains("no updates")
+        {
+            return true
+        }
+
+        // Defensive checks for known Sparkle-style domain/code pairs.
+        let sparkleDomains = [
+            "SUSparkleErrorDomain",
+            "SUUpdaterErrorDomain",
+        ]
+        if sparkleDomains.contains(nsError.domain),
+            [1001, 1002].contains(nsError.code)
+        {
+            return true
+        }
+
+        return false
     }
 
     /// The underlying Sparkle updater, exposed for advanced configuration if needed.
