@@ -8,7 +8,9 @@ enum SyntaxHighlighter {
 
     // MARK: - Public
 
-    static func highlight(_ code: String, language: String?, theme: AppTheme = .system) -> AttributedString {
+    static func highlight(_ code: String, language: String?, theme: AppTheme = .system)
+        -> AttributedString
+    {
         let lang = (language ?? "").lowercased()
         let tokens = tokenize(code, language: lang)
         return buildAttributedString(from: tokens, theme: theme)
@@ -36,13 +38,13 @@ enum SyntaxHighlighter {
 
     private static func color(for kind: TokenKind, theme: AppTheme) -> Color {
         switch kind {
-        case .plain:       return theme.syntaxPlain
-        case .keyword:     return theme.syntaxKeyword
-        case .string:      return theme.syntaxString
-        case .comment:     return theme.syntaxComment
-        case .number:      return theme.syntaxNumber
-        case .type:        return theme.syntaxType
-        case .function:    return theme.syntaxFunction
+        case .plain: return theme.syntaxPlain
+        case .keyword: return theme.syntaxKeyword
+        case .string: return theme.syntaxString
+        case .comment: return theme.syntaxComment
+        case .number: return theme.syntaxNumber
+        case .type: return theme.syntaxType
+        case .function: return theme.syntaxFunction
         case .punctuation: return theme.syntaxPunctuation
         }
     }
@@ -60,7 +62,7 @@ enum SyntaxHighlighter {
         "final", "inout", "operator", "subscript", "willSet", "didSet", "get", "set",
         "@State", "@Binding", "@Published", "@ObservedObject", "@StateObject", "@Environment",
         "@MainActor", "@Sendable", "@escaping", "@ViewBuilder", "@main", "@available",
-        "@discardableResult", "@objc"
+        "@discardableResult", "@objc",
     ]
 
     private static let jsKeywords: Set<String> = [
@@ -70,14 +72,14 @@ enum SyntaxHighlighter {
         "typeof", "instanceof", "in", "of", "true", "false", "null", "undefined", "void",
         "yield", "static", "get", "set", "constructor", "interface", "type", "enum",
         "implements", "public", "private", "protected", "readonly", "abstract", "as",
-        "declare", "module", "namespace", "require"
+        "declare", "module", "namespace", "require",
     ]
 
     private static let pythonKeywords: Set<String> = [
         "def", "class", "if", "elif", "else", "for", "while", "return", "import", "from",
         "as", "try", "except", "finally", "raise", "with", "yield", "lambda", "pass",
         "break", "continue", "and", "or", "not", "in", "is", "True", "False", "None",
-        "global", "nonlocal", "del", "assert", "async", "await", "self", "print"
+        "global", "nonlocal", "del", "assert", "async", "await", "self", "print",
     ]
 
     private static let genericKeywords: Set<String> = [
@@ -94,14 +96,14 @@ enum SyntaxHighlighter {
         "INNER", "LEFT", "RIGHT", "OUTER", "INDEX", "PRIMARY", "KEY", "FOREIGN",
         "REFERENCES", "CASCADE", "CONSTRAINT", "CHECK", "UNIQUE", "DEFAULT", "EXISTS",
         "UNION", "ALL", "COUNT", "SUM", "AVG", "MAX", "MIN", "BETWEEN", "LIKE", "IN",
-        "CASE", "WHEN", "THEN", "ELSE", "END", "BEGIN", "COMMIT", "ROLLBACK"
+        "CASE", "WHEN", "THEN", "ELSE", "END", "BEGIN", "COMMIT", "ROLLBACK",
     ]
 
     private static let swiftTypes: Set<String> = [
         "String", "Int", "Double", "Float", "Bool", "Array", "Dictionary", "Set",
         "Optional", "Result", "Error", "URL", "Data", "Date", "UUID", "View", "Text",
         "Button", "VStack", "HStack", "ZStack", "List", "ForEach", "Image",
-        "NavigationStack", "NavigationSplitView", "Color", "Font"
+        "NavigationStack", "NavigationSplitView", "Color", "Font",
     ]
 
     private static func keywords(for lang: String) -> Set<String> {
@@ -132,7 +134,11 @@ enum SyntaxHighlighter {
                 continue
             }
             // Python/shell comment
-            if c == "#" && (language == "python" || language == "py" || language == "bash" || language == "sh" || language == "shell" || language == "yaml" || language == "yml" || language == "ruby" || language == "rb") {
+            if c == "#"
+                && (language == "python" || language == "py" || language == "bash"
+                    || language == "sh" || language == "shell" || language == "yaml"
+                    || language == "yml" || language == "ruby" || language == "rb")
+            {
                 let start = i
                 while i < chars.count && chars[i] != "\n" { i += 1 }
                 tokens.append(Token(text: String(chars[start..<i]), kind: .comment))
@@ -161,7 +167,7 @@ enum SyntaxHighlighter {
                 let start = i
                 i += 1
                 while i < chars.count && chars[i] != quote {
-                    if chars[i] == "\\" { i += 1 } // skip escaped
+                    if chars[i] == "\\" { i += 1 }  // skip escaped
                     i += 1
                 }
                 if i < chars.count { i += 1 }
@@ -172,8 +178,11 @@ enum SyntaxHighlighter {
             // Numbers
             if c.isNumber || (c == "." && i + 1 < chars.count && chars[i + 1].isNumber) {
                 let start = i
-                while i < chars.count && (chars[i].isNumber || chars[i] == "." || chars[i] == "x" || chars[i] == "X" ||
-                        (chars[i] >= "a" && chars[i] <= "f") || (chars[i] >= "A" && chars[i] <= "F") || chars[i] == "_") {
+                while i < chars.count
+                    && (chars[i].isNumber || chars[i] == "." || chars[i] == "x" || chars[i] == "X"
+                        || (chars[i] >= "a" && chars[i] <= "f")
+                        || (chars[i] >= "A" && chars[i] <= "F") || chars[i] == "_")
+                {
                     i += 1
                 }
                 tokens.append(Token(text: String(chars[start..<i]), kind: .number))
@@ -184,7 +193,8 @@ enum SyntaxHighlighter {
             if c.isLetter || c == "_" || c == "@" {
                 let start = i
                 i += 1
-                while i < chars.count && (chars[i].isLetter || chars[i].isNumber || chars[i] == "_") { i += 1 }
+                while i < chars.count && (chars[i].isLetter || chars[i].isNumber || chars[i] == "_")
+                { i += 1 }
                 let word = String(chars[start..<i])
 
                 if kw.contains(word) {
@@ -219,7 +229,9 @@ enum SyntaxHighlighter {
 
     // MARK: - Build AttributedString
 
-    private static func buildAttributedString(from tokens: [Token], theme: AppTheme) -> AttributedString {
+    private static func buildAttributedString(from tokens: [Token], theme: AppTheme)
+        -> AttributedString
+    {
         var result = AttributedString()
         for token in tokens {
             var part = AttributedString(token.text)

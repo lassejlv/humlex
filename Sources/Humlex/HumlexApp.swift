@@ -61,8 +61,7 @@ struct HumlexApp: App {
 
 private func updateAppearance(for theme: AppTheme) {
     if theme.isCustom {
-        // Custom themes are all dark, so force dark appearance
-        NSApp.appearance = NSAppearance(named: .darkAqua)
+        NSApp.appearance = NSAppearance(named: theme.prefersDarkAppearance ? .darkAqua : .aqua)
     } else {
         // System theme: let macOS decide
         NSApp.appearance = nil

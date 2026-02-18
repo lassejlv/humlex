@@ -73,7 +73,7 @@ struct ChatComposerView: View {
 
                     if draft.isEmpty && attachments.isEmpty {
                         Text(
-                            "Message (\u{21B5} to send) \u{2022} @ for files"
+                            "Message (\u{21B5} to send) \u{2022} @ for files \u{2022} $ for skills"
                         )
                         .font(.system(size: 14))
                         .foregroundStyle(theme.textTertiary)
@@ -242,11 +242,14 @@ struct ChatComposerView: View {
             }
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(theme.composerBackground)
+                    .fill(Color.clear)
                     .overlay(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .stroke(
-                                isDraggingOver ? theme.accent : (isFocused ? theme.composerBorderFocused : theme.composerBorder),
+                                isDraggingOver
+                                    ? theme.accent
+                                    : (isFocused
+                                        ? theme.composerBorderFocused : theme.composerBorder),
                                 lineWidth: isDraggingOver ? 2 : 1)
                     )
             )
