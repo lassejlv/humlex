@@ -453,6 +453,15 @@ struct ContentView: View {
                 .disabled(!appUpdater.canCheckForUpdates)
                 .help("Check for Updates")
 
+                if appUpdater.canOpenReleaseNotes {
+                    Button {
+                        appUpdater.openLatestReleaseNotes()
+                    } label: {
+                        Label("Release Notes", systemImage: "doc.text")
+                    }
+                    .help("Open latest release notes")
+                }
+
                 Button {
                     createThread()
                 } label: {

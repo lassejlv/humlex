@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import Sparkle
@@ -15,6 +16,7 @@ final class AppUpdater: ObservableObject {
 
     /// Whether the updater is ready to check (false while a check is already in progress).
     @Published var canCheckForUpdates = false
+    @Published private(set) var latestReleaseNotesURL: URL?
 
     init() {
         // We perform our own startup + periodic checks and status reporting.
@@ -30,6 +32,7 @@ final class AppUpdater: ObservableObject {
             .assign(to: \.canCheckForUpdates, on: self)
 
         delegateProxy.onDidFindValidUpdate = { [weak self] item in
+            self?.latestReleaseNotesURL = item.fullReleaseNotesURL ?? item.releaseNotesURL
             self?.statusUpdates?.clearPersistent(key: "updater_check")
             self?.statusUpdates?.post(
                 message: "Update available: \(item.displayVersionString)",
@@ -40,6 +43,7 @@ final class AppUpdater: ObservableObject {
         }
 
         delegateProxy.onDidNotFindUpdate = { [weak self] in
+            self?.latestReleaseNotesURL = nil
             self?.statusUpdates?.clearPersistent(key: "updater_check")
             self?.statusUpdates?.post(
                 message: "App is up to date.",
@@ -52,6 +56,7 @@ final class AppUpdater: ObservableObject {
         delegateProxy.onDidAbortWithError = { [weak self] error in
             self?.statusUpdates?.clearPersistent(key: "updater_check")
             if self?.isNoUpdateAbort(error) == true {
+                self?.latestReleaseNotesURL = nil
                 self?.statusUpdates?.post(
                     message: "App is up to date.",
                     source: "Updater",
@@ -81,6 +86,15 @@ final class AppUpdater: ObservableObject {
             duration: 3
         )
         updaterController.checkForUpdates(nil)
+    }
+
+    var canOpenReleaseNotes: Bool {
+        latestReleaseNotesURL != nil
+    }
+
+    func openLatestReleaseNotes() {
+        guard let url = latestReleaseNotesURL else { return }
+        NSWorkspace.shared.open(url)
     }
 
     /// Starts automatic silent update checks on startup and then every `interval` seconds.
