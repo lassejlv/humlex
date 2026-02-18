@@ -3,6 +3,7 @@ import SwiftUI
 
 enum SettingsTab: String, CaseIterable, Identifiable {
     case general = "General"
+    case skills = "Skills"
     case providers = "Providers"
     case experimental = "Experimental"
     case mcp = "MCP Servers"
@@ -14,6 +15,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .general: return "gearshape"
+        case .skills: return "sparkles"
         case .providers: return "bolt.horizontal"
         case .experimental: return "flask"
         case .mcp: return "server.rack"
@@ -33,16 +35,23 @@ struct SettingsView: View {
     @Binding var vercelAIAPIKey: String
     @Binding var geminiAPIKey: String
     @Binding var kimiAPIKey: String
+    let canMigrateLegacyKeys: Bool
 
     let isLoadingModels: Bool
     let modelCounts: [AIProvider: Int]
     let statusMessage: String?
+    let currentWorkingDirectory: String?
     let onFetchModels: () -> Void
+    let onMigrateLegacyKeysToKeychain: () -> Void
+    let onImportChats: () -> Void
+    let onExportAllChats: () -> Void
+    let onDeleteAllChats: () -> Void
     let onClose: () -> Void
 
     @EnvironmentObject private var themeManager: ThemeManager
     @EnvironmentObject private var appUpdater: AppUpdater
     @Environment(\.appTheme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
     @ObservedObject private var mcpManager = MCPManager.shared
 
     @State private var selectedTab: SettingsTab = .general
@@ -70,6 +79,12 @@ struct SettingsView: View {
     @State private var newServerArgs = ""
     @State private var newServerEnv = ""
     @State private var serverToDelete: String? = nil
+    @State private var isShowingDeleteAllChatsAlert = false
+    @State private var settingsSearchText: String = ""
+    @State private var discoveredSkills: [HumlexSkill] = []
+    @State private var skillSearchRoots: [String] = []
+    @State private var isRefreshingSkills = false
+    @State private var skillsFilterText: String = ""
 
     private var activeSectionTitle: String {
         switch selectedTab {
@@ -79,6 +94,8 @@ struct SettingsView: View {
             return "MCP Servers"
         case .general:
             return "General"
+        case .skills:
+            return "Skills"
         case .theme:
             return "Theme"
         case .systemInstructions:
@@ -96,6 +113,8 @@ struct SettingsView: View {
             return "Configure Model Context Protocol servers"
         case .general:
             return "App behavior and defaults"
+        case .skills:
+            return "Discover and manage Humlex SKILL.md instructions"
         case .theme:
             return "Appearance and syntax palette"
         case .systemInstructions:
@@ -113,6 +132,8 @@ struct SettingsView: View {
             return "server.rack"
         case .general:
             return "gearshape"
+        case .skills:
+            return "sparkles"
         case .theme:
             return "paintbrush"
         case .systemInstructions:
@@ -120,74 +141,85 @@ struct SettingsView: View {
         }
     }
 
+    private var settingsSearchQuery: String {
+        settingsSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isSearchingSettings: Bool {
+        !settingsSearchQuery.isEmpty
+    }
+
+    private func matchesSettingsSearch(_ text: String) -> Bool {
+        guard isSearchingSettings else { return true }
+        return text.localizedCaseInsensitiveContains(settingsSearchQuery)
+    }
+
+    private var settingsWindowTop: Color {
+        if colorScheme == .dark { return Color(red: 0.10, green: 0.10, blue: 0.11) }
+        return theme.sidebarBackground.opacity(0.92)
+    }
+
+    private var settingsWindowBottom: Color {
+        if colorScheme == .dark { return Color(red: 0.08, green: 0.08, blue: 0.09) }
+        return theme.background
+    }
+
+    private var settingsChromeBackground: Color {
+        if colorScheme == .dark { return Color(red: 0.09, green: 0.09, blue: 0.10) }
+        return theme.background.opacity(0.9)
+    }
+
+    private var settingsSidebarColor: Color {
+        if colorScheme == .dark { return Color(red: 0.11, green: 0.11, blue: 0.12) }
+        return theme.sidebarBackground.opacity(0.75)
+    }
+
+    private var settingsCardBackground: Color {
+        if colorScheme == .dark { return Color(red: 0.13, green: 0.13, blue: 0.14) }
+        return theme.surfaceBackground.opacity(0.88)
+    }
+
+    private var settingsControlBackground: Color {
+        if colorScheme == .dark { return Color(red: 0.16, green: 0.16, blue: 0.17) }
+        return theme.surfaceBackground
+    }
+
+    private var settingsSelectionBackground: Color {
+        if colorScheme == .dark { return Color(red: 0.18, green: 0.18, blue: 0.20) }
+        return theme.selectionBackground
+    }
+
+    private var settingsBorderColor: Color {
+        if colorScheme == .dark { return Color.white.opacity(0.10) }
+        return theme.chipBorder
+    }
+
+    private var settingsHoverBackground: Color {
+        if colorScheme == .dark { return Color(red: 0.22, green: 0.22, blue: 0.23) }
+        return theme.hoverBackground
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Image(systemName: activeSectionIcon)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(theme.accent)
-                    .frame(width: 30, height: 30)
-                    .background(
-                        theme.surfaceBackground,
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    )
+        HStack(spacing: 0) {
+            settingsSidebar
+            settingsBorderColor.opacity(0.8).frame(width: 1)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Settings")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(theme.textPrimary)
-
-                    Text(activeSectionSubtitle)
-                        .font(.system(size: 11))
-                        .foregroundStyle(theme.textTertiary)
-                }
-
-                Spacer()
-
-                Text(activeSectionTitle)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(theme.textSecondary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(theme.chipBackground, in: Capsule())
-
-                Button {
-                    onClose()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(theme.textSecondary)
-                        .frame(width: 24, height: 24)
-                        .background(theme.hoverBackground, in: Circle())
-                }
-                .buttonStyle(.plain)
-                .help("Close")
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(theme.background)
-
-            theme.divider.frame(height: 1)
-
-            // Main content: sidebar + detail
-            HStack(spacing: 0) {
-                settingsSidebar
-                theme.divider.frame(width: 1)
+            VStack(spacing: 0) {
+                settingsHeader
+                settingsBorderColor.opacity(0.8).frame(height: 1)
 
                 settingsDetail
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(theme.background.opacity(0.92))
+                    .background(settingsChromeBackground)
+
+                settingsBorderColor.opacity(0.8).frame(height: 1)
+                bottomBar
             }
-
-            theme.divider.frame(height: 1)
-
-            // Bottom bar
-            bottomBar
         }
-        .frame(width: 860, height: 620)
+        .frame(width: 980, height: 700)
         .background(
             LinearGradient(
-                colors: [theme.background, theme.surfaceBackground.opacity(0.85)],
+                colors: [settingsWindowTop, settingsWindowBottom],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -195,9 +227,63 @@ struct SettingsView: View {
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(theme.chipBorder, lineWidth: 1)
+                .stroke(settingsBorderColor, lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.2), radius: 22, y: 12)
+        .alert("Delete All Chats", isPresented: $isShowingDeleteAllChatsAlert) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete All", role: .destructive) {
+                onDeleteAllChats()
+            }
+        } message: {
+            Text("This removes all conversations and cannot be undone.")
+        }
+    }
+
+    private var settingsHeader: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: activeSectionIcon)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(theme.accent)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        settingsControlBackground,
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    )
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(activeSectionTitle)
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(theme.textPrimary)
+
+                    Text(activeSectionSubtitle)
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.textTertiary)
+                }
+            }
+
+            Spacer()
+
+            if selectedTab == .providers || selectedTab == .experimental {
+                statusBadge
+            }
+
+            Button {
+                onClose()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(theme.textSecondary)
+                    .frame(width: 24, height: 24)
+                    .background(settingsHoverBackground, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .help("Close")
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 14)
+        .background(settingsChromeBackground.opacity(0.95))
     }
 
     @ViewBuilder
@@ -205,6 +291,8 @@ struct SettingsView: View {
         switch selectedTab {
         case .general:
             generalDetail
+        case .skills:
+            skillsDetail
         case .providers:
             providerDetail
         case .experimental:
@@ -221,47 +309,133 @@ struct SettingsView: View {
     // MARK: - Settings Sidebar
 
     private var settingsSidebar: some View {
-        List {
-            Section("Settings") {
-                ForEach(SettingsTab.allCases) { tab in
-                    tabRow(tab)
-                }
-            }
+        let generalTabs: [SettingsTab] = [.general, .skills, .theme, .systemInstructions]
+        let filteredGeneralTabs = generalTabs.filter { matchesSettingsSearch($0.rawValue) }
+        let filteredProviderTabs = providers(for: .providers).filter {
+            matchesSettingsSearch($0.rawValue)
+        }
+        let filteredExperimentalTabs = providers(for: .experimental).filter {
+            matchesSettingsSearch($0.rawValue)
+        }
+        let showIntegrations = matchesSettingsSearch(SettingsTab.mcp.rawValue)
+        let hasAnySidebarResult =
+            !filteredGeneralTabs.isEmpty
+            || !filteredProviderTabs.isEmpty
+            || !filteredExperimentalTabs.isEmpty
+            || showIntegrations
 
-            if selectedTab == .providers {
-                Section("Providers") {
-                    ForEach(providers(for: .providers)) { provider in
-                        providerRow(provider)
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(Color.red.opacity(0.85))
+                        .frame(width: 11, height: 11)
+                    Circle()
+                        .fill(Color.yellow.opacity(0.85))
+                        .frame(width: 11, height: 11)
+                    Circle()
+                        .fill(Color.green.opacity(0.85))
+                        .frame(width: 11, height: 11)
+                }
+                .padding(.horizontal, 8)
+                .padding(.top, 4)
+
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(theme.textTertiary)
+
+                    TextField("Search settings", text: $settingsSearchText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13))
+                        .foregroundStyle(theme.textPrimary)
+
+                    if !settingsSearchText.isEmpty {
+                        Button {
+                            settingsSearchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 12))
+                                .foregroundStyle(theme.textTertiary)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
-            }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(
+                    settingsControlBackground.opacity(0.95),
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(settingsBorderColor, lineWidth: 1)
+                )
 
-            if selectedTab == .experimental {
-                Section("Experimental") {
-                    ForEach(providers(for: .experimental)) { provider in
-                        experimentalProviderRow(provider)
-                    }
-                }
-            }
-
-            if selectedTab == .mcp {
-                let serverNames = Array(mcpManager.serverStatuses.keys).sorted()
-                if !serverNames.isEmpty {
-                    Section("Servers") {
-                        ForEach(serverNames, id: \.self) { name in
-                            mcpServerRow(name)
+                if !filteredGeneralTabs.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        sidebarSectionTitle("General")
+                        ForEach(filteredGeneralTabs) { tab in
+                            sidebarTabButton(tab)
                         }
                     }
                 }
+
+                if !filteredProviderTabs.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        sidebarSectionTitle("Providers")
+                        ForEach(filteredProviderTabs) { provider in
+                            sidebarProviderButton(provider, in: .providers)
+                        }
+                    }
+                }
+
+                if !filteredExperimentalTabs.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        sidebarSectionTitle("Experimental")
+                        ForEach(filteredExperimentalTabs) { provider in
+                            sidebarProviderButton(provider, in: .experimental)
+                        }
+                    }
+                }
+
+                if showIntegrations {
+                    VStack(alignment: .leading, spacing: 6) {
+                        sidebarSectionTitle("Integrations")
+                        sidebarTabButton(.mcp)
+                    }
+                }
+
+                if isSearchingSettings && !hasAnySidebarResult {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("No matches")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(theme.textSecondary)
+                        Text("Try a provider or section name.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.textTertiary)
+                    }
+                    .padding(.horizontal, 8)
+                }
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 14)
         }
-        .listStyle(.sidebar)
-        .scrollContentBackground(.hidden)
-        .frame(width: 250)
-        .background(theme.sidebarBackground.opacity(0.65))
+        .frame(width: 285)
+        .background(settingsSidebarColor)
     }
 
-    private func tabRow(_ tab: SettingsTab) -> some View {
+    private func sidebarSectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(theme.textTertiary)
+            .textCase(.uppercase)
+            .tracking(0.5)
+            .padding(.horizontal, 8)
+            .padding(.bottom, 2)
+    }
+
+    private func sidebarTabButton(_ tab: SettingsTab) -> some View {
         let isSelected = selectedTab == tab
         return Button {
             selectedTab = tab
@@ -269,127 +443,82 @@ struct SettingsView: View {
                 selectedProvider = first
             }
         } label: {
-            HStack(spacing: 9) {
+            HStack(spacing: 10) {
                 Image(systemName: tab.icon)
-                    .font(.system(size: 14, weight: .regular))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(isSelected ? theme.accent : theme.textSecondary)
-                    .frame(width: 18)
+                    .frame(width: 24, height: 24)
+                    .background(
+                        (isSelected
+                            ? settingsSelectionBackground : settingsControlBackground.opacity(0.8)),
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    )
 
                 Text(tab.rawValue)
-                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                    .font(.system(size: 14, weight: isSelected ? .semibold : .regular))
                     .foregroundStyle(isSelected ? theme.textPrimary : theme.textSecondary)
 
                 Spacer()
             }
-            .padding(.vertical, 4)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isSelected ? settingsSelectionBackground : Color.clear)
+            )
         }
         .buttonStyle(.plain)
-        .listRowBackground(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isSelected ? theme.selectionBackground : Color.clear)
-        )
     }
 
-    private func providerRow(_ provider: AIProvider) -> some View {
-        let isSelected = selectedProvider == provider && selectedTab == settingsTab(for: provider)
-        let hasKey: Bool = {
-            providerHasRequiredCredentials(provider)
-        }()
+    private func sidebarProviderButton(_ provider: AIProvider, in tab: SettingsTab) -> some View {
+        let isSelected = selectedProvider == provider && selectedTab == tab
+        let isEnabled = experimentalToggleBinding(for: provider).wrappedValue
+        let hasKey = providerHasRequiredCredentials(provider)
 
         return Button {
-            selectedTab = settingsTab(for: provider)
-            selectedProvider = provider
+            withAnimation(.easeInOut(duration: 0.15)) {
+                selectedTab = tab
+                selectedProvider = provider
+            }
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 ProviderIcon(slug: provider.iconSlug, size: 16)
                     .foregroundColor(isSelected ? theme.accent : theme.textSecondary)
+                    .frame(width: 24, height: 24)
+                    .background(
+                        (isSelected
+                            ? settingsSelectionBackground : settingsControlBackground.opacity(0.8)),
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    )
 
                 Text(provider.rawValue)
-                    .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-                    .foregroundStyle(isSelected ? theme.textPrimary : theme.textSecondary)
+                    .font(.system(size: 14, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(
+                        tab == .experimental && !isEnabled
+                            ? theme.textTertiary
+                            : (isSelected ? theme.textPrimary : theme.textSecondary)
+                    )
 
                 Spacer()
 
-                if hasKey {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(Color.green)
+                if tab == .experimental {
+                    Image(systemName: isEnabled ? "bolt.fill" : "bolt.slash")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(isEnabled ? Color.orange : theme.textTertiary)
                 } else {
-                    Image(systemName: "circle")
-                        .font(.system(size: 10))
-                        .foregroundStyle(theme.textTertiary.opacity(0.4))
+                    Circle()
+                        .fill(hasKey ? Color.green.opacity(0.85) : theme.textTertiary.opacity(0.35))
+                        .frame(width: 7, height: 7)
                 }
             }
-            .padding(.vertical, 4)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isSelected ? settingsSelectionBackground : Color.clear)
+            )
         }
         .buttonStyle(.plain)
-        .listRowBackground(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isSelected ? theme.selectionBackground : Color.clear)
-        )
-    }
-
-    private func experimentalProviderRow(_ provider: AIProvider) -> some View {
-        let isSelected = selectedProvider == provider && selectedTab == .experimental
-        let isEnabled = experimentalToggleBinding(for: provider).wrappedValue
-
-        return HStack(spacing: 8) {
-            Button {
-                selectedTab = .experimental
-                selectedProvider = provider
-            } label: {
-                HStack(spacing: 10) {
-                    ProviderIcon(slug: provider.iconSlug, size: 18)
-                        .foregroundColor(isSelected ? theme.accent : theme.textSecondary)
-
-                    Text(provider.rawValue)
-                        .font(.system(size: 13))
-                        .foregroundStyle(isEnabled ? theme.textPrimary : theme.textTertiary)
-
-                    Spacer()
-                }
-                .padding(.vertical, 4)
-                .background(
-                    isSelected
-                        ? theme.selectionBackground
-                        : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                )
-                .contentShape(RoundedRectangle(cornerRadius: 8))
-            }
-            .buttonStyle(.plain)
-
-            Toggle("", isOn: experimentalToggleBinding(for: provider))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .scaleEffect(0.75)
-        }
-        .listRowBackground(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isSelected ? theme.selectionBackground : Color.clear)
-        )
-    }
-
-    private func mcpServerRow(_ name: String) -> some View {
-        let status = mcpManager.serverStatuses[name] ?? .disconnected
-        return HStack(spacing: 10) {
-            Image(systemName: "gearshape.2")
-                .font(.system(size: 13))
-                .foregroundStyle(theme.textSecondary)
-                .frame(width: 18)
-
-            Text(name)
-                .font(.system(size: 13))
-                .foregroundStyle(theme.textPrimary)
-                .lineLimit(1)
-
-            Spacer()
-
-            Circle()
-                .fill(mcpStatusColor(status))
-                .frame(width: 6, height: 6)
-        }
-        .padding(.vertical, 4)
     }
 
     // MARK: - Provider Detail
@@ -442,6 +571,9 @@ struct SettingsView: View {
             }
         }
         .onChange(of: selectedTab) { _, newValue in
+            if newValue == .skills {
+                refreshSkills()
+            }
             let available = providers(for: newValue)
             if let first = available.first, !available.contains(selectedProvider) {
                 selectedProvider = first
@@ -461,6 +593,7 @@ struct SettingsView: View {
                 Toggle("", isOn: $isOllamaEnabled)
                     .labelsHidden()
                     .toggleStyle(.switch)
+                    .tint(theme.accent)
             }
 
             Text("Local Endpoint")
@@ -532,12 +665,12 @@ struct SettingsView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .background(
-                    theme.surfaceBackground,
+                    settingsControlBackground,
                     in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(theme.composerBorder, lineWidth: 1)
+                        .stroke(settingsBorderColor, lineWidth: 1)
                 )
             }
 
@@ -629,12 +762,12 @@ struct SettingsView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .background(
-                    theme.surfaceBackground,
+                    settingsControlBackground,
                     in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(theme.composerBorder, lineWidth: 1)
+                        .stroke(settingsBorderColor, lineWidth: 1)
                 )
             }
 
@@ -687,12 +820,12 @@ struct SettingsView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .background(
-                        theme.surfaceBackground,
+                        settingsControlBackground,
                         in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(theme.composerBorder, lineWidth: 1)
+                            .stroke(settingsBorderColor, lineWidth: 1)
                     )
                 }
             }
@@ -752,12 +885,12 @@ struct SettingsView: View {
                 }
                 .padding(4)
                 .background(
-                    theme.surfaceBackground,
+                    settingsControlBackground,
                     in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(theme.composerBorder, lineWidth: 1)
+                        .stroke(settingsBorderColor, lineWidth: 1)
                 )
             }
 
@@ -848,12 +981,12 @@ struct SettingsView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(
-                        theme.surfaceBackground,
+                        settingsControlBackground,
                         in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(theme.composerBorder, lineWidth: 1)
+                            .stroke(settingsBorderColor, lineWidth: 1)
                     )
             }
         }
@@ -937,12 +1070,12 @@ struct SettingsView: View {
                 }
                 .padding(12)
                 .background(
-                    theme.surfaceBackground,
+                    settingsCardBackground,
                     in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(theme.composerBorder, lineWidth: 1)
+                        .stroke(settingsBorderColor, lineWidth: 1)
                 )
             }
 
@@ -972,7 +1105,7 @@ struct SettingsView: View {
             .foregroundStyle(theme.textSecondary)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(theme.chipBackground, in: Capsule())
+            .background(settingsControlBackground, in: Capsule())
         } else if count > 0 {
             HStack(spacing: 4) {
                 Image(systemName: "checkmark.circle.fill")
@@ -994,7 +1127,7 @@ struct SettingsView: View {
             .foregroundStyle(theme.textSecondary)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(theme.chipBackground, in: Capsule())
+            .background(settingsControlBackground, in: Capsule())
         } else {
             HStack(spacing: 4) {
                 Image(systemName: "circle")
@@ -1005,7 +1138,174 @@ struct SettingsView: View {
             .foregroundStyle(theme.textSecondary)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(theme.chipBackground, in: Capsule())
+            .background(settingsControlBackground, in: Capsule())
+        }
+    }
+
+    // MARK: - Skills Detail
+
+    private var filteredSkills: [HumlexSkill] {
+        let query = skillsFilterText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return discoveredSkills }
+        return discoveredSkills.filter { skill in
+            skill.name.localizedCaseInsensitiveContains(query)
+                || skill.summary.localizedCaseInsensitiveContains(query)
+                || skill.sourcePath.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    private var skillsDetail: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Skills")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(theme.textPrimary)
+
+                Spacer()
+
+                if isRefreshingSkills {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+
+                HStack(spacing: 4) {
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 11))
+                    Text("\(discoveredSkills.count)")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundStyle(discoveredSkills.isEmpty ? theme.textSecondary : .green)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(settingsControlBackground, in: Capsule())
+                .overlay(Capsule().stroke(settingsBorderColor, lineWidth: 1))
+
+                Button {
+                    refreshSkills()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(theme.textSecondary)
+                        .frame(width: 24, height: 24)
+                        .background(
+                            settingsControlBackground, in: RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+                .help("Refresh skills")
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 20)
+            .padding(.bottom, 16)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    settingsGroup("Usage") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("In agent mode, add skills in your prompt with `$skillName`.")
+                                .font(.system(size: 13))
+                                .foregroundStyle(theme.textSecondary)
+                            if let currentWorkingDirectory,
+                                !currentWorkingDirectory.trimmingCharacters(
+                                    in: .whitespacesAndNewlines
+                                ).isEmpty
+                            {
+                                Text("Active working directory: \(currentWorkingDirectory)")
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .foregroundStyle(theme.textTertiary)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                    }
+
+                    settingsGroup("Search") {
+                        HStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 12))
+                                .foregroundStyle(theme.textTertiary)
+                            TextField("Filter skills", text: $skillsFilterText)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 13))
+                                .foregroundStyle(theme.textPrimary)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
+                    }
+
+                    settingsGroup("Skill Roots") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(skillSearchRoots, id: \.self) { root in
+                                Text(root)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(theme.textTertiary)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                    }
+
+                    settingsGroup("Detected Skills") {
+                        if filteredSkills.isEmpty {
+                            Text("No SKILL.md files found.")
+                                .font(.system(size: 12))
+                                .foregroundStyle(theme.textSecondary)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 12)
+                        } else {
+                            VStack(spacing: 0) {
+                                ForEach(Array(filteredSkills.enumerated()), id: \.element.id) {
+                                    index, skill in
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        HStack(alignment: .firstTextBaseline) {
+                                            Text(skill.name)
+                                                .font(.system(size: 14, weight: .semibold))
+                                                .foregroundStyle(theme.textPrimary)
+                                            Spacer()
+                                            Button {
+                                                NSWorkspace.shared.open(
+                                                    URL(fileURLWithPath: skill.sourcePath))
+                                            } label: {
+                                                Text("Open")
+                                                    .font(.system(size: 11, weight: .medium))
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .controlSize(.mini)
+                                        }
+
+                                        if !skill.summary.isEmpty {
+                                            Text(skill.summary)
+                                                .font(.system(size: 12))
+                                                .foregroundStyle(theme.textSecondary)
+                                        }
+
+                                        Text(skill.sourcePath)
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .foregroundStyle(theme.textTertiary)
+                                            .textSelection(.enabled)
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 10)
+
+                                    if index < filteredSkills.count - 1 {
+                                        settingsBorderColor.opacity(0.6).frame(height: 1)
+                                            .padding(.leading, 14)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 22)
+                .padding(.vertical, 18)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .onAppear {
+            if discoveredSkills.isEmpty {
+                refreshSkills()
+            }
         }
     }
 
@@ -1038,7 +1338,7 @@ struct SettingsView: View {
                         .foregroundStyle(theme.textSecondary)
                         .frame(width: 24, height: 24)
                         .background(
-                            theme.chipBackground,
+                            settingsControlBackground,
                             in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                 }
                 .buttonStyle(.plain)
@@ -1058,7 +1358,7 @@ struct SettingsView: View {
                     // Config file path
                     mcpConfigPathSection
 
-                    theme.divider.frame(height: 1)
+                    settingsBorderColor.opacity(0.7).frame(height: 1)
 
                     // Server list
                     let serverNames = Array(mcpManager.serverStatuses.keys).sorted()
@@ -1114,7 +1414,7 @@ struct SettingsView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(
-            (count > 0 ? Color.green.opacity(0.12) : theme.chipBackground),
+            (count > 0 ? Color.green.opacity(0.12) : settingsControlBackground),
             in: Capsule()
         )
     }
@@ -1168,11 +1468,11 @@ struct SettingsView: View {
         }
         .padding(14)
         .background(
-            theme.surfaceBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            settingsCardBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(theme.accent.opacity(0.3), lineWidth: 1)
+                .stroke(settingsBorderColor, lineWidth: 1)
         )
     }
 
@@ -1404,11 +1704,11 @@ struct SettingsView: View {
         }
         .padding(12)
         .background(
-            theme.hoverBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            settingsControlBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(theme.chipBorder, lineWidth: 1)
+                .stroke(settingsBorderColor, lineWidth: 1)
         )
     }
 
@@ -1422,8 +1722,8 @@ struct SettingsView: View {
         .foregroundStyle(theme.textSecondary)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(theme.chipBackground, in: Capsule())
-        .overlay(Capsule().stroke(theme.chipBorder, lineWidth: 0.5))
+        .background(settingsControlBackground, in: Capsule())
+        .overlay(Capsule().stroke(settingsBorderColor, lineWidth: 0.5))
         .help(tool.description)
     }
 
@@ -1516,11 +1816,12 @@ struct SettingsView: View {
             .padding(12)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isSelected ? theme.selectionBackground : theme.hoverBackground)
+                    .fill(isSelected ? settingsSelectionBackground : settingsControlBackground)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(isSelected ? theme.accent.opacity(0.4) : theme.chipBorder, lineWidth: 1)
+                    .stroke(
+                        isSelected ? theme.accent.opacity(0.4) : settingsBorderColor, lineWidth: 1)
             )
             .contentShape(RoundedRectangle(cornerRadius: 10))
         }
@@ -1612,266 +1913,181 @@ struct SettingsView: View {
 
     private var generalDetail: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("General")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(theme.textPrimary)
-                .padding(.horizontal, 24)
-                .padding(.top, 20)
-                .padding(.bottom, 16)
-
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    // Auto-scroll setting
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack(spacing: 12) {
-                            Image(systemName: "arrow.down.circle")
-                                .font(.system(size: 16))
-                                .foregroundStyle(theme.accent)
-                                .frame(width: 24)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Auto-scroll")
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundStyle(theme.textPrimary)
-
-                                Text(
-                                    "Automatically scroll to new messages during streaming. When disabled, you'll need to scroll manually."
-                                )
-                                .font(.system(size: 12))
-                                .foregroundStyle(theme.textSecondary)
-                                .lineLimit(nil)
-                                .fixedSize(horizontal: false, vertical: true)
-                            }
-
-                            Spacer()
-
-                            Toggle("", isOn: $isAutoScrollEnabled)
-                                .labelsHidden()
-                                .toggleStyle(.switch)
-                        }
-
-                        if isAutoScrollEnabled {
-                            HStack(spacing: 8) {
-                                Image(systemName: "info.circle")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(theme.textTertiary)
-
-                                Text(
-                                    "Scrolling up will pause auto-scroll until you scroll back to the bottom"
-                                )
-                                .font(.system(size: 11))
-                                .foregroundStyle(theme.textTertiary)
-                            }
-                            .padding(.leading, 36)
-                        }
+                VStack(alignment: .leading, spacing: 20) {
+                    settingsGroup("Behavior") {
+                        settingsToggleRow(
+                            title: "Auto-scroll",
+                            subtitle:
+                                "Automatically scroll to new messages during streaming.",
+                            isOn: $isAutoScrollEnabled,
+                            showDivider: true
+                        )
+                        settingsToggleRow(
+                            title: "Performance mode",
+                            subtitle:
+                                "Render recent messages first and load older messages on demand.",
+                            isOn: $isPerformanceModeEnabled,
+                            showDivider: true
+                        )
+                        settingsToggleRow(
+                            title: "Model picker in toolbar",
+                            subtitle:
+                                "Move model selection from composer to the top toolbar.",
+                            isOn: $isModelPickerInToolbarEnabled,
+                            showDivider: true
+                        )
+                        settingsToggleRow(
+                            title: "Debug mode",
+                            subtitle: "Show FPS, CPU, and memory metrics overlay.",
+                            isOn: $isDebugModeEnabled,
+                            showDivider: false
+                        )
                     }
-                    .padding(16)
-                    .background(
-                        theme.surfaceBackground,
-                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(theme.chipBorder, lineWidth: 1)
-                    )
 
-                    // Visible message count
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack(spacing: 12) {
-                            Image(systemName: "text.line.first.and.arrowtriangle.forward")
-                                .font(.system(size: 16))
-                                .foregroundStyle(theme.accent)
-                                .frame(width: 24)
-
-                            VStack(alignment: .leading, spacing: 2) {
+                    settingsGroup("Performance") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
                                 Text("Messages to keep visible")
-                                    .font(.system(size: 14, weight: .medium))
+                                    .font(.system(size: 15, weight: .medium))
                                     .foregroundStyle(theme.textPrimary)
-
-                                Text(
-                                    "How many recent messages stay mounted before older messages are collapsed behind \"Load older messages\"."
-                                )
-                                .font(.system(size: 12))
-                                .foregroundStyle(theme.textSecondary)
-                                .lineLimit(nil)
-                                .fixedSize(horizontal: false, vertical: true)
+                                Spacer()
+                                Text("\(performanceVisibleMessageLimit)")
+                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(theme.textSecondary)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(settingsControlBackground, in: Capsule())
                             }
 
-                            Spacer()
-                        }
+                            Picker(
+                                "Messages to keep visible",
+                                selection: $performanceVisibleMessageLimit
+                            ) {
+                                Text("100").tag(100)
+                                Text("250").tag(250)
+                                Text("500").tag(500)
+                                Text("1000").tag(1000)
+                            }
+                            .pickerStyle(.segmented)
+                            .disabled(!isPerformanceModeEnabled)
 
-                        Picker(
-                            "Messages to keep visible", selection: $performanceVisibleMessageLimit
-                        ) {
-                            Text("100").tag(100)
-                            Text("250").tag(250)
-                            Text("500").tag(500)
-                            Text("1000").tag(1000)
-                        }
-                        .pickerStyle(.segmented)
-                        .disabled(!isPerformanceModeEnabled)
-
-                        if !isPerformanceModeEnabled {
-                            HStack(spacing: 8) {
-                                Image(systemName: "info.circle")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(theme.textTertiary)
-
+                            if !isPerformanceModeEnabled {
                                 Text("Enable Performance mode to apply this setting.")
                                     .font(.system(size: 11))
                                     .foregroundStyle(theme.textTertiary)
                             }
                         }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
                     }
-                    .padding(16)
-                    .background(
-                        theme.surfaceBackground,
-                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(theme.chipBorder, lineWidth: 1)
-                    )
 
-                    // Performance mode setting
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack(spacing: 12) {
-                            Image(systemName: "speedometer")
-                                .font(.system(size: 16))
-                                .foregroundStyle(theme.accent)
-                                .frame(width: 24)
+                    settingsGroup("Chat Data") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(
+                                "Import from zip/json, export all chats to zip, or delete all chats."
+                            )
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.textSecondary)
 
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Performance mode")
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundStyle(theme.textPrimary)
-
-                                Text(
-                                    "Improve large chat responsiveness by rendering recent messages first and loading older messages on demand."
-                                )
-                                .font(.system(size: 12))
-                                .foregroundStyle(theme.textSecondary)
-                                .lineLimit(nil)
-                                .fixedSize(horizontal: false, vertical: true)
-                            }
-
-                            Spacer()
-
-                            Toggle("", isOn: $isPerformanceModeEnabled)
-                                .labelsHidden()
-                                .toggleStyle(.switch)
-                        }
-
-                        if isPerformanceModeEnabled {
                             HStack(spacing: 8) {
-                                Image(systemName: "info.circle")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(theme.textTertiary)
+                                Button {
+                                    onImportChats()
+                                } label: {
+                                    Label("Import", systemImage: "square.and.arrow.down")
+                                        .font(.system(size: 12, weight: .semibold))
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(theme.accent)
 
-                                Text(
-                                    "Older messages are available with \"Load older messages\" above the chat."
-                                )
-                                .font(.system(size: 11))
-                                .foregroundStyle(theme.textTertiary)
+                                Button {
+                                    onExportAllChats()
+                                } label: {
+                                    Label("Export", systemImage: "square.and.arrow.up")
+                                        .font(.system(size: 12, weight: .semibold))
+                                }
+                                .buttonStyle(.bordered)
+
+                                Button(role: .destructive) {
+                                    isShowingDeleteAllChatsAlert = true
+                                } label: {
+                                    Label("Delete All", systemImage: "trash")
+                                        .font(.system(size: 12, weight: .semibold))
+                                }
+                                .buttonStyle(.bordered)
                             }
-                            .padding(.leading, 36)
                         }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
                     }
-                    .padding(16)
-                    .background(
-                        theme.surfaceBackground,
-                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(theme.chipBorder, lineWidth: 1)
-                    )
-
-                    // Model picker placement
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack(spacing: 12) {
-                            Image(systemName: "slider.horizontal.3")
-                                .font(.system(size: 16))
-                                .foregroundStyle(theme.accent)
-                                .frame(width: 24)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Model picker in toolbar")
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundStyle(theme.textPrimary)
-
-                                Text(
-                                    "Move model selection from the composer to the top toolbar next to Settings."
-                                )
-                                .font(.system(size: 12))
-                                .foregroundStyle(theme.textSecondary)
-                                .lineLimit(nil)
-                                .fixedSize(horizontal: false, vertical: true)
-                            }
-
-                            Spacer()
-
-                            Toggle("", isOn: $isModelPickerInToolbarEnabled)
-                                .labelsHidden()
-                                .toggleStyle(.switch)
-                        }
-                    }
-                    .padding(16)
-                    .background(
-                        theme.surfaceBackground,
-                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(theme.chipBorder, lineWidth: 1)
-                    )
-
-                    // Debug mode setting
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack(spacing: 12) {
-                            Image(systemName: "ladybug")
-                                .font(.system(size: 16))
-                                .foregroundStyle(theme.accent)
-                                .frame(width: 24)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Debug mode")
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundStyle(theme.textPrimary)
-
-                                Text(
-                                    "Show a live banner with FPS, CPU, and memory usage to diagnose UI performance."
-                                )
-                                .font(.system(size: 12))
-                                .foregroundStyle(theme.textSecondary)
-                                .lineLimit(nil)
-                                .fixedSize(horizontal: false, vertical: true)
-                            }
-
-                            Spacer()
-
-                            Toggle("", isOn: $isDebugModeEnabled)
-                                .labelsHidden()
-                                .toggleStyle(.switch)
-                        }
-                    }
-                    .padding(16)
-                    .background(
-                        theme.surfaceBackground,
-                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(theme.chipBorder, lineWidth: 1)
-                    )
                 }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 16)
+                .padding(.horizontal, 22)
+                .padding(.vertical, 18)
             }
-
-            Spacer()
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private func settingsGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content)
+        -> some View
+    {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(theme.textTertiary)
+                .padding(.horizontal, 4)
+
+            VStack(spacing: 0) {
+                content()
+            }
+            .background(
+                settingsCardBackground,
+                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(settingsBorderColor.opacity(0.95), lineWidth: 1)
+            )
+        }
+    }
+
+    private func settingsToggleRow(
+        title: String,
+        subtitle: String?,
+        isOn: Binding<Bool>,
+        showDivider: Bool
+    ) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(theme.textPrimary)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.textTertiary)
+                            .lineLimit(2)
+                    }
+                }
+
+                Spacer()
+
+                Toggle("", isOn: isOn)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(theme.accent)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+
+            if showDivider {
+                settingsBorderColor
+                    .opacity(0.6)
+                    .frame(height: 1)
+                    .padding(.leading, 14)
+            }
+        }
     }
 
     // MARK: - Bottom Bar
@@ -1888,6 +2104,19 @@ struct SettingsView: View {
             Spacer()
 
             if selectedTab == .providers {
+                if canMigrateLegacyKeys {
+                    Button {
+                        onMigrateLegacyKeysToKeychain()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "key.horizontal")
+                            Text("Migrate Legacy Keys")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                }
+
                 Button {
                     onFetchModels()
                 } label: {
@@ -1927,7 +2156,7 @@ struct SettingsView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
-        .background(theme.surfaceBackground.opacity(0.65))
+        .background(settingsChromeBackground)
     }
 
     // MARK: - Helpers
@@ -1980,12 +2209,26 @@ struct SettingsView: View {
 
     private func providers(for tab: SettingsTab) -> [AIProvider] {
         switch tab {
-        case .general, .mcp, .theme, .systemInstructions:
+        case .general, .skills, .mcp, .theme, .systemInstructions:
             return []
         case .providers:
             return AIProvider.allCases.filter { !isExperimentalProvider($0) }
         case .experimental:
             return AIProvider.allCases.filter { isExperimentalProvider($0) }
+        }
+    }
+
+    private func refreshSkills() {
+        isRefreshingSkills = true
+        let workingDirectory = currentWorkingDirectory
+        Task(priority: .userInitiated) {
+            let skills = HumlexSkillCatalog.availableSkills(workingDirectory: workingDirectory)
+            let roots = HumlexSkillCatalog.searchRoots(workingDirectory: workingDirectory)
+            await MainActor.run {
+                discoveredSkills = skills
+                skillSearchRoots = roots
+                isRefreshingSkills = false
+            }
         }
     }
 

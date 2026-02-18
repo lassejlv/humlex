@@ -4,6 +4,7 @@ import SwiftUI
 struct MessageRow: View {
     let message: ChatMessage
     let isStreaming: Bool
+    let isAgentMode: Bool
     let isLastAssistant: Bool
     let onRetry: (() -> Void)?
 
@@ -16,11 +17,13 @@ struct MessageRow: View {
     init(
         message: ChatMessage,
         isStreaming: Bool,
+        isAgentMode: Bool = false,
         isLastAssistant: Bool = false,
         onRetry: (() -> Void)? = nil
     ) {
         self.message = message
         self.isStreaming = isStreaming
+        self.isAgentMode = isAgentMode
         self.isLastAssistant = isLastAssistant
         self.onRetry = onRetry
         _toolResultExpanded = State(initialValue: Self.initialToolResultExpanded(for: message))
@@ -86,9 +89,10 @@ struct MessageRow: View {
     private var assistantBlock: some View {
         VStack(alignment: .leading, spacing: 6) {
             if isStreaming && message.text.isEmpty && (message.toolCalls ?? []).isEmpty {
-                // Skeleton loading state
-                SkeletonView()
-                    .frame(maxWidth: 760, alignment: .leading)
+                ThinkingIndicatorView(
+                    label: isAgentMode ? "Agent is working" : "Thinking"
+                )
+                .frame(maxWidth: 760, alignment: .leading)
             } else {
                 if !message.text.isEmpty {
                     MarkdownView(source: message.text, isStreaming: isStreaming)
@@ -270,7 +274,8 @@ struct MessageRow: View {
     }
 
     private var toolResultBlock: some View {
-        let isBuiltIn = message.toolName.map { BuiltInToolRegistry.shared.hasTool(named: $0) } ?? false
+        let isBuiltIn =
+            message.toolName.map { BuiltInToolRegistry.shared.hasTool(named: $0) } ?? false
         let isCommand = message.toolName == "run_command"
         let isFileRead = message.toolName == "read_file"
         let isSearch = message.toolName == "search_files"
@@ -574,110 +579,62 @@ struct MessageRow: View {
     }
 }
 
-// MARK: - Skeleton Loading View
+extension MessageRow: Equatable {
+    static func == (lhs: MessageRow, rhs: MessageRow) -> Bool {
+        lhs.isStreaming == rhs.isStreaming
+            && lhs.isAgentMode == rhs.isAgentMode
+            && lhs.isLastAssistant == rhs.isLastAssistant
+            && lhs.message == rhs.message
+    }
+}
 
-struct SkeletonView: View {
+// MARK: - Thinking Indicator
+
+struct ThinkingIndicatorView: View {
     @Environment(\.appTheme) private var theme
-    @State private var shimmerOffset: CGFloat = -1
-    @State private var spinnerRotation: Double = 0
-    @State private var dotAnimationIndex: Int = 0
-    @State private var dotTimer: Timer?
+    @State private var isAnimating = false
+    let label: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // Loading Spinner Row
-            HStack(spacing: 12) {
-                // Animated Spinner
-                Circle()
-                    .stroke(
-                        AngularGradient(
-                            colors: [
-                                theme.accent.opacity(0.0),
-                                theme.accent.opacity(0.3),
-                                theme.accent.opacity(0.8),
-                                theme.accent.opacity(1.0),
-                            ],
-                            center: .center,
-                            startAngle: .degrees(0),
-                            endAngle: .degrees(360)
-                        ),
-                        lineWidth: 2.5
-                    )
-                    .frame(width: 15, height: 15)
-                    .rotationEffect(.degrees(spinnerRotation))
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+                .tint(theme.accent)
 
-                Text("Thinking")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(theme.textSecondary)
+            Text(label)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(theme.textSecondary)
 
-                Spacer()
-            }
-            .onAppear {
-                // Spinner rotation - faster spin
-                withAnimation(
-                    .linear(duration: 0.7)
-                        .repeatForever(autoreverses: false)
-                ) {
-                    spinnerRotation = 360
-                }
-
-                // Dot animation timer
-                dotTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { _ in
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        dotAnimationIndex = (dotAnimationIndex + 1) % 3
-                    }
+            HStack(spacing: 4) {
+                ForEach(0..<3, id: \.self) { idx in
+                    Circle()
+                        .fill(theme.textTertiary.opacity(0.65))
+                        .frame(width: 4.5, height: 4.5)
+                        .scaleEffect(isAnimating ? 1.0 : 0.72)
+                        .opacity(isAnimating ? 1.0 : 0.45)
+                        .animation(
+                            .easeInOut(duration: 0.55)
+                                .repeatForever(autoreverses: true)
+                                .delay(Double(idx) * 0.12),
+                            value: isAnimating
+                        )
                 }
             }
-            .onDisappear {
-                dotTimer?.invalidate()
-                dotTimer = nil
-            }
 
-            // Skeleton Lines with staggered shimmer
-            VStack(alignment: .leading, spacing: 10) {
-                skeletonLine(width: 320, delay: 0.0)
-                skeletonLine(width: 260, delay: 0.15)
-                skeletonLine(width: 290, delay: 0.30)
-            }
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(theme.codeBackground.opacity(0.45))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(theme.codeBorder.opacity(0.7), lineWidth: 1)
+        )
         .onAppear {
-            withAnimation(
-                .easeInOut(duration: 1.5)
-                    .repeatForever(autoreverses: false)
-            ) {
-                shimmerOffset = 2
-            }
+            isAnimating = true
         }
-    }
-
-    private func skeletonLine(width: CGFloat, delay: Double) -> some View {
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
-            .fill(theme.textTertiary.opacity(0.12))
-            .frame(width: width, height: 11)
-            .overlay(
-                GeometryReader { geo in
-                    let shimmerWidth = geo.size.width * 0.5
-                    LinearGradient(
-                        colors: [
-                            .clear,
-                            theme.textSecondary.opacity(0.15),
-                            theme.accent.opacity(0.08),
-                            theme.textSecondary.opacity(0.15),
-                            .clear,
-                        ],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                    .frame(width: shimmerWidth)
-                    .offset(x: shimmerOffset * geo.size.width - shimmerWidth / 2)
-                    .animation(
-                        .easeInOut(duration: 1.5)
-                            .repeatForever(autoreverses: false)
-                            .delay(delay),
-                        value: shimmerOffset
-                    )
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            )
     }
 }

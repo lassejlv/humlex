@@ -11,14 +11,24 @@ import SwiftUI
 struct AppStatusBarView: View {
     let status: StatusUpdateSDK.StatusItem?
     let fallbackText: String?
+    let isBusy: Bool
+    let busyText: String?
 
     @Environment(\.appTheme) private var theme
 
     var body: some View {
         HStack(spacing: 8) {
-            Circle()
-                .fill(indicatorColor)
-                .frame(width: 8, height: 8)
+            if isBusy {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(theme.accent)
+                    .scaleEffect(0.75)
+                    .frame(width: 8, height: 8)
+            } else {
+                Circle()
+                    .fill(indicatorColor)
+                    .frame(width: 8, height: 8)
+            }
 
             Text(displayText)
                 .font(.system(size: 11))
@@ -27,7 +37,7 @@ struct AppStatusBarView: View {
 
             Spacer()
 
-            if let source = status?.source {
+            if !isBusy, let source = status?.source {
                 Text(source)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(theme.textTertiary)
@@ -48,6 +58,9 @@ struct AppStatusBarView: View {
     }
 
     private var displayText: String {
+        if isBusy, let busyText, !busyText.isEmpty {
+            return busyText
+        }
         if let status {
             return status.message
         }
@@ -58,6 +71,7 @@ struct AppStatusBarView: View {
     }
 
     private var indicatorColor: Color {
+        if isBusy { return theme.accent }
         guard let status else { return theme.textTertiary.opacity(0.7) }
         switch status.level {
         case .info: return theme.accent

@@ -7,8 +7,14 @@
 
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
+    private enum ChatImportMode {
+        case merge
+        case replace
+    }
+
     @AppStorage("selected_model_reference") private var selectedModelReference: String = ""
     @AppStorage("selected_thread_id") private var selectedThreadIDRaw: String = ""
     @AppStorage("codex_sandbox_mode") private var codexSandboxModeRaw: String = CodexSandboxMode
@@ -34,6 +40,8 @@ struct ContentView: View {
     @State private var debouncedSearchText: String = ""
     private let searchDebounceInterval: TimeInterval = 0.2
     @State private var searchDebounceWorkItem: DispatchWorkItem?
+    @State private var searchRefreshWorkItem: DispatchWorkItem?
+    @State private var filteredThreadIDs: [UUID] = []
 
     @State private var threads: [ChatThread] = [
         ChatThread(
@@ -61,10 +69,15 @@ struct ContentView: View {
     @State private var geminiAPIKey: String = ""
     @State private var kimiAPIKey: String = ""
     @State private var didLoadAPIKeys = false
+    @State private var canMigrateLegacyKeys = false
     @State private var isShowingSettings = false
     @State private var streamingMessageID: UUID?
     @State private var persistWorkItem: DispatchWorkItem?
     @State private var streamingTask: Task<Void, Never>?
+    @State private var persistedThreadFingerprintByID: [UUID: Int] = [:]
+    @State private var tokenEstimateRefreshWorkItem: DispatchWorkItem?
+    @State private var tokenEstimateFingerprintByThread: [UUID: Int] = [:]
+    @State private var estimatedTokensByThread: [UUID: Int] = [:]
 
     // MARK: - Streaming Batching
     /// Buffers streaming text deltas to batch UI updates (reduces per-token lag)
@@ -144,12 +157,8 @@ struct ContentView: View {
         if debouncedSearchText.isEmpty {
             return threads
         }
-        return threads.filter { thread in
-            thread.title.localizedCaseInsensitiveContains(debouncedSearchText)
-                || thread.messages.contains {
-                    $0.text.localizedCaseInsensitiveContains(debouncedSearchText)
-                }
-        }
+        let idSet = Set(filteredThreadIDs)
+        return threads.filter { idSet.contains($0.id) }
     }
 
     private var currentMessages: [ChatMessage] {
@@ -184,26 +193,18 @@ struct ContentView: View {
     private var currentContextUsage: ThreadTokenUsage? {
         guard let idx = selectedThreadIndex else { return nil }
         let thread = threads[idx]
-
-        // Get the context window from the selected model
         let contextWindow = selectedModel?.contextWindow ?? 128_000
+        let estimatedTokens =
+            estimatedTokensByThread[thread.id] ?? thread.tokenUsage?.estimatedTokens
+            ?? 0
 
-        // Calculate estimated tokens for current messages
-        let estimatedTokens = TokenEstimator.estimateTotalTokens(for: thread.messages)
-
-        // Use existing usage data if available, otherwise create new
         if var usage = thread.tokenUsage {
-            // Update with current estimate if no actual usage yet
-            if usage.actualTokens == nil {
-                usage.updateEstimated(estimatedTokens)
-            }
+            usage.contextWindow = contextWindow
+            if usage.actualTokens == nil { usage.estimatedTokens = estimatedTokens }
             return usage
-        } else {
-            return ThreadTokenUsage(
-                estimatedTokens: estimatedTokens,
-                contextWindow: contextWindow
-            )
         }
+
+        return ThreadTokenUsage(estimatedTokens: estimatedTokens, contextWindow: contextWindow)
     }
 
     /// Binding to the selected thread's agentEnabled flag.
@@ -313,6 +314,9 @@ struct ContentView: View {
                     selectedThreadID = threads.first?.id
                 }
 
+                rebuildFilteredThreadCache()
+                refreshTokenEstimate(for: selectedThreadID, immediate: true)
+
                 if models.isEmpty {
                     Task { await fetchModels() }
                 }
@@ -327,6 +331,8 @@ struct ContentView: View {
             .onDisappear {
                 stopStreaming()
                 debugPerformanceMonitor.stop()
+                tokenEstimateRefreshWorkItem?.cancel()
+                searchRefreshWorkItem?.cancel()
             }
             .onReceive(NotificationCenter.default.publisher(for: .openSettingsRequested)) { _ in
                 isShowingSettings = true
@@ -364,6 +370,7 @@ struct ContentView: View {
                 if let id = newValue, messageRenderLimitByThread[id] == nil {
                     messageRenderLimitByThread[id] = resolvedVisibleMessageLimit
                 }
+                refreshTokenEstimate(for: newValue, immediate: true)
             }
             .onChange(of: isPerformanceModeEnabled) { _, newValue in
                 guard newValue, let id = selectedThreadID, messageRenderLimitByThread[id] == nil
@@ -385,6 +392,10 @@ struct ContentView: View {
             }
             .onChange(of: threads) { _, newValue in
                 schedulePersist(newValue)
+                if !debouncedSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    scheduleFilteredThreadCacheRebuild()
+                }
+                refreshTokenEstimate(for: selectedThreadID, immediate: false)
             }
 
         let decorated =
@@ -512,6 +523,7 @@ struct ContentView: View {
             searchDebounceWorkItem?.cancel()
             let workItem = DispatchWorkItem { [self] in
                 debouncedSearchText = newValue
+                scheduleFilteredThreadCacheRebuild()
             }
             searchDebounceWorkItem = workItem
             DispatchQueue.main.asyncAfter(
@@ -523,9 +535,32 @@ struct ContentView: View {
         VStack(spacing: 0) {
             detailContent
             chatComposerView
-            AppStatusBarView(status: statusUpdates.current, fallbackText: statusMessage)
+            AppStatusBarView(
+                status: isAppBusy ? nil : statusUpdates.current,
+                fallbackText: statusMessage,
+                isBusy: isAppBusy,
+                busyText: appBusyText
+            )
         }
         .background(theme.background)
+    }
+
+    private var isAppBusy: Bool {
+        isSending || isLoadingModels || mcpManager.isLoading
+    }
+
+    private var appBusyText: String? {
+        if isSending {
+            let isAgentMode = selectedThreadIndex.map { threads[$0].agentEnabled } ?? false
+            return isAgentMode ? "Agent is working..." : "Generating response..."
+        }
+        if isLoadingModels {
+            return "Loading available models..."
+        }
+        if mcpManager.isLoading {
+            return "Connecting MCP servers..."
+        }
+        return nil
     }
 
     @ViewBuilder
@@ -552,6 +587,22 @@ struct ContentView: View {
                 Text("Choose a chat in the sidebar or write a message below.")
                     .font(.system(size: 13))
                     .foregroundStyle(theme.textTertiary)
+
+                if isAppBusy, let busyText = appBusyText {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(theme.accent)
+                        Text(busyText)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(theme.textSecondary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(theme.hoverBackground, in: Capsule())
+                    .overlay(Capsule().stroke(theme.chipBorder, lineWidth: 1))
+                    .padding(.top, 4)
+                }
 
                 if statusMessage != nil {
                     Text(statusMessage!)
@@ -712,11 +763,21 @@ struct ContentView: View {
             vercelAIAPIKey: $vercelAIAPIKey,
             geminiAPIKey: $geminiAPIKey,
             kimiAPIKey: $kimiAPIKey,
+            canMigrateLegacyKeys: canMigrateLegacyKeys,
             isLoadingModels: isLoadingModels,
             modelCounts: modelCounts,
-            statusMessage: statusMessage
+            statusMessage: statusMessage,
+            currentWorkingDirectory: selectedThreadIndex.flatMap { threads[$0].workingDirectory }
         ) {
             Task { await fetchModels() }
+        } onMigrateLegacyKeysToKeychain: {
+            migrateLegacyKeysToKeychain()
+        } onImportChats: {
+            importChatsFromFile()
+        } onExportAllChats: {
+            exportAllChatsToZip()
+        } onDeleteAllChats: {
+            clearAllChats(showToast: true)
         } onClose: {
             isShowingSettings = false
         }
@@ -757,35 +818,31 @@ struct ContentView: View {
     }
 
     private func clearAllChats(showToast: Bool) {
+        persistWorkItem?.cancel()
+        do {
+            try ChatPersistence.wipeAllChats()
+        } catch {
+            statusMessage = "Failed deleting chat files: \(error.localizedDescription)"
+        }
         threads = [ChatThread(id: UUID(), title: "New Chat", messages: [])]
+        filteredThreadIDs = []
+        persistedThreadFingerprintByID = [:]
+        tokenEstimateFingerprintByThread = [:]
+        estimatedTokensByThread = [:]
         selectedThreadID = threads.first?.id
+        refreshTokenEstimate(for: selectedThreadID, immediate: true)
+        persistChats(threads)
         if showToast {
             toastManager.show(.success("All chats cleared", icon: "trash"))
         }
     }
 
     private func exportThreadToMarkdown(_ thread: ChatThread) {
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateStyle = .medium
-        dateFormatter.timeStyle = .short
-
-        var markdown = "# \(thread.title)\n\n"
-
-        for message in thread.messages {
-            let role: String
-            switch message.role {
-            case .user: role = "**User**"
-            case .assistant: role = "**Assistant**"
-            case .tool: role = "**Tool** (\(message.toolName ?? "unknown"))"
-            }
-            let timestamp = dateFormatter.string(from: message.timestamp)
-            markdown += "\(role) — _\(timestamp)_\n\n"
-            markdown += "\(message.text)\n\n---\n\n"
-        }
+        let markdown = markdown(for: thread)
 
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.init(filenameExtension: "md")!]
-        panel.nameFieldStringValue = "\(thread.title).md"
+        panel.nameFieldStringValue = "\(sanitizedExportName(thread.title, fallback: "chat")).md"
         panel.canCreateDirectories = true
 
         if panel.runModal() == .OK, let url = panel.url {
@@ -796,6 +853,359 @@ struct ContentView: View {
                 toastManager.show(.error("Failed to export: \(error.localizedDescription)"))
             }
         }
+    }
+
+    private func importChatsFromFile() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.zip, .json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.prompt = "Import"
+
+        guard panel.runModal() == .OK, let fileURL = panel.url else { return }
+
+        do {
+            let importedThreads = try loadThreadsForImport(from: fileURL)
+            guard !importedThreads.isEmpty else {
+                toastManager.show(.error("No chats found in selected file"))
+                return
+            }
+
+            guard let mode = chooseImportMode() else { return }
+            importChats(importedThreads, mode: mode)
+        } catch {
+            toastManager.show(.error("Failed to import chats: \(error.localizedDescription)"))
+        }
+    }
+
+    private func chooseImportMode() -> ChatImportMode? {
+        let alert = NSAlert()
+        alert.messageText = "Import Chats"
+        alert.informativeText = "Choose how imported chats should be applied."
+        alert.addButton(withTitle: "Merge")
+        alert.addButton(withTitle: "Replace Existing")
+        alert.addButton(withTitle: "Cancel")
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            return .merge
+        case .alertSecondButtonReturn:
+            return .replace
+        default:
+            return nil
+        }
+    }
+
+    private func loadThreadsForImport(from fileURL: URL) throws -> [ChatThread] {
+        if fileURL.pathExtension.lowercased() == "zip" {
+            return try loadThreadsFromZip(fileURL)
+        }
+        return try decodeThreadsFromJSON(at: fileURL)
+    }
+
+    private func loadThreadsFromZip(_ zipURL: URL) throws -> [ChatThread] {
+        let fileManager = FileManager.default
+        let tempRoot = fileManager.temporaryDirectory
+            .appendingPathComponent("humlex-import-\(UUID().uuidString)", isDirectory: true)
+
+        defer { try? fileManager.removeItem(at: tempRoot) }
+
+        try fileManager.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+
+        let unzip = Process()
+        unzip.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        unzip.arguments = ["-x", "-k", zipURL.path, tempRoot.path]
+        try unzip.run()
+        unzip.waitUntilExit()
+
+        guard unzip.terminationStatus == 0 else {
+            throw NSError(
+                domain: "HumlexImport",
+                code: Int(unzip.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: "Could not unzip archive."]
+            )
+        }
+
+        let jsonURL = try findImportJSON(in: tempRoot)
+        return try decodeThreadsFromJSON(at: jsonURL)
+    }
+
+    private func findImportJSON(in root: URL) throws -> URL {
+        let fileManager = FileManager.default
+        let enumerator = fileManager.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
+
+        var jsonCandidates: [URL] = []
+        while let url = enumerator?.nextObject() as? URL {
+            guard url.pathExtension.lowercased() == "json" else { continue }
+            jsonCandidates.append(url)
+        }
+
+        if let preferred = jsonCandidates.first(where: {
+            $0.lastPathComponent.lowercased() == "all-chats.json"
+        }) {
+            return preferred
+        }
+
+        if jsonCandidates.count == 1, let only = jsonCandidates.first {
+            return only
+        }
+
+        throw NSError(
+            domain: "HumlexImport",
+            code: 2,
+            userInfo: [
+                NSLocalizedDescriptionKey:
+                    "Could not find a valid chats JSON file in the zip (expected all-chats.json)."
+            ]
+        )
+    }
+
+    private func decodeThreadsFromJSON(at url: URL) throws -> [ChatThread] {
+        let data = try Data(contentsOf: url)
+
+        let isoDecoder = JSONDecoder()
+        isoDecoder.dateDecodingStrategy = .iso8601
+
+        if let threads = try? isoDecoder.decode([ChatThread].self, from: data) {
+            return threads
+        }
+
+        if let thread = try? isoDecoder.decode(ChatThread.self, from: data) {
+            return [thread]
+        }
+
+        let fallbackDecoder = JSONDecoder()
+        if let threads = try? fallbackDecoder.decode([ChatThread].self, from: data) {
+            return threads
+        }
+        if let thread = try? fallbackDecoder.decode(ChatThread.self, from: data) {
+            return [thread]
+        }
+
+        throw NSError(
+            domain: "HumlexImport",
+            code: 3,
+            userInfo: [NSLocalizedDescriptionKey: "Unsupported JSON format for chat import."]
+        )
+    }
+
+    private func importChats(_ imported: [ChatThread], mode: ChatImportMode) {
+        switch mode {
+        case .merge:
+            mergeImportedThreads(imported)
+        case .replace:
+            replaceChatsWithImported(imported)
+        }
+    }
+
+    private func normalizeImportedThreads(_ imported: [ChatThread], existingIDs: Set<UUID>)
+        -> [ChatThread]
+    {
+        var usedIDs = existingIDs
+        var mergedImports: [ChatThread] = []
+
+        for thread in imported {
+            if usedIDs.insert(thread.id).inserted {
+                mergedImports.append(thread)
+                continue
+            }
+
+            let remapped = ChatThread(
+                id: UUID(),
+                title: thread.title,
+                messages: thread.messages,
+                agentEnabled: thread.agentEnabled,
+                dangerousMode: thread.dangerousMode,
+                workingDirectory: thread.workingDirectory,
+                systemPrompt: thread.systemPrompt,
+                tokenUsage: thread.tokenUsage,
+                modelReference: thread.modelReference
+            )
+            usedIDs.insert(remapped.id)
+            mergedImports.append(remapped)
+        }
+
+        return mergedImports
+    }
+
+    private func mergeImportedThreads(_ imported: [ChatThread]) {
+        let mergedImports = normalizeImportedThreads(imported, existingIDs: Set(threads.map(\.id)))
+
+        guard !mergedImports.isEmpty else {
+            toastManager.show(.error("No chats were imported"))
+            return
+        }
+
+        threads = mergedImports + threads
+        selectedThreadID = mergedImports.first?.id ?? selectedThreadID
+
+        tokenEstimateFingerprintByThread = [:]
+        estimatedTokensByThread = [:]
+        refreshTokenEstimate(for: selectedThreadID, immediate: true)
+        persistChats(threads)
+
+        toastManager.show(
+            .success("Imported \(mergedImports.count) chat(s)", icon: "square.and.arrow.down")
+        )
+    }
+
+    private func replaceChatsWithImported(_ imported: [ChatThread]) {
+        let normalized = normalizeImportedThreads(imported, existingIDs: [])
+        guard !normalized.isEmpty else {
+            toastManager.show(.error("No chats were imported"))
+            return
+        }
+
+        threads = normalized
+        selectedThreadID = normalized.first?.id
+
+        filteredThreadIDs = []
+        tokenEstimateFingerprintByThread = [:]
+        estimatedTokensByThread = [:]
+        refreshTokenEstimate(for: selectedThreadID, immediate: true)
+        persistChats(threads)
+
+        toastManager.show(
+            .success(
+                "Replaced with \(normalized.count) imported chat(s)",
+                icon: "arrow.triangle.2.circlepath")
+        )
+    }
+
+    private func exportAllChatsToZip() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.zip]
+        panel.canCreateDirectories = true
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd-HHmm"
+        panel.nameFieldStringValue = "Humlex-Chats-\(formatter.string(from: .now)).zip"
+
+        guard panel.runModal() == .OK, let destinationURL = panel.url else { return }
+
+        do {
+            let fileManager = FileManager.default
+            let tempRoot = fileManager.temporaryDirectory
+                .appendingPathComponent("humlex-export-\(UUID().uuidString)", isDirectory: true)
+            let exportRoot = tempRoot.appendingPathComponent("Humlex Chats", isDirectory: true)
+            let markdownDir = exportRoot.appendingPathComponent("markdown", isDirectory: true)
+
+            defer { try? fileManager.removeItem(at: tempRoot) }
+
+            try fileManager.createDirectory(at: markdownDir, withIntermediateDirectories: true)
+
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+
+            let archiveData = try encoder.encode(threads)
+            try archiveData.write(
+                to: exportRoot.appendingPathComponent("all-chats.json"),
+                options: .atomic
+            )
+
+            struct ExportManifest: Codable {
+                let exportedAt: Date
+                let app: String
+                let formatVersion: Int
+                let chatCount: Int
+            }
+
+            let manifest = ExportManifest(
+                exportedAt: .now,
+                app: "Humlex",
+                formatVersion: 1,
+                chatCount: threads.count
+            )
+            let manifestData = try encoder.encode(manifest)
+            try manifestData.write(
+                to: exportRoot.appendingPathComponent("manifest.json"),
+                options: .atomic
+            )
+
+            for (index, thread) in threads.enumerated() {
+                let fallback = "chat-\(index + 1)"
+                let safeTitle = sanitizedExportName(thread.title, fallback: fallback)
+                let markdownURL = markdownDir.appendingPathComponent(
+                    String(format: "%03d-%@.md", index + 1, safeTitle)
+                )
+                try markdown(for: thread).write(
+                    to: markdownURL,
+                    atomically: true,
+                    encoding: .utf8
+                )
+            }
+
+            if fileManager.fileExists(atPath: destinationURL.path) {
+                try fileManager.removeItem(at: destinationURL)
+            }
+
+            let zipProcess = Process()
+            zipProcess.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+            zipProcess.arguments = [
+                "-c", "-k", "--sequesterRsrc", "--keepParent",
+                exportRoot.path, destinationURL.path,
+            ]
+            try zipProcess.run()
+            zipProcess.waitUntilExit()
+
+            guard zipProcess.terminationStatus == 0 else {
+                throw NSError(
+                    domain: "HumlexExport",
+                    code: Int(zipProcess.terminationStatus),
+                    userInfo: [NSLocalizedDescriptionKey: "Failed to create zip archive."]
+                )
+            }
+
+            toastManager.show(
+                .success("Exported \(threads.count) chat(s) to zip", icon: "archivebox")
+            )
+        } catch {
+            toastManager.show(.error("Failed to export chats: \(error.localizedDescription)"))
+        }
+    }
+
+    private func markdown(for thread: ChatThread) -> String {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateStyle = .medium
+        dateFormatter.timeStyle = .short
+
+        var markdown = "# \(thread.title)\n\n"
+
+        for message in thread.messages {
+            let role: String
+            switch message.role {
+            case .user:
+                role = "**User**"
+            case .assistant:
+                role = "**Assistant**"
+            case .tool:
+                role = "**Tool** (\(message.toolName ?? "unknown"))"
+            }
+            let timestamp = dateFormatter.string(from: message.timestamp)
+            markdown += "\(role) — _\(timestamp)_\n\n"
+            markdown += "\(message.text)\n\n---\n\n"
+        }
+
+        return markdown
+    }
+
+    private func sanitizedExportName(_ name: String, fallback: String) -> String {
+        let invalid = CharacterSet(charactersIn: "/:\\?%*|\"<>")
+        let cleaned =
+            name
+            .components(separatedBy: invalid)
+            .joined(separator: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: " ", with: "-")
+
+        let result = cleaned.isEmpty ? fallback : cleaned
+        return String(result.prefix(80))
     }
 
     private func adapter(for provider: AIProvider) -> any LLMProviderAdapter {
@@ -878,18 +1288,156 @@ struct ContentView: View {
         do {
             if let loaded = try ChatPersistence.load(), !loaded.isEmpty {
                 threads = loaded
+                persistedThreadFingerprintByID = loaded.reduce(into: [:]) { result, thread in
+                    result[thread.id] = threadPersistenceFingerprint(thread)
+                }
             }
         } catch {
             statusMessage = "Failed loading chats: \(error.localizedDescription)"
         }
     }
 
+    private func scheduleFilteredThreadCacheRebuild() {
+        let query = debouncedSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if query.isEmpty {
+            searchRefreshWorkItem?.cancel()
+            searchRefreshWorkItem = nil
+            if !filteredThreadIDs.isEmpty {
+                filteredThreadIDs = []
+            }
+            return
+        }
+
+        searchRefreshWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [self] in
+            rebuildFilteredThreadCache()
+        }
+        searchRefreshWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: workItem)
+    }
+
+    private func rebuildFilteredThreadCache() {
+        let query = debouncedSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            filteredThreadIDs = []
+            return
+        }
+
+        filteredThreadIDs = threads.compactMap { thread in
+            if thread.title.localizedCaseInsensitiveContains(query) {
+                return thread.id
+            }
+            if thread.messages.contains(where: { $0.text.localizedCaseInsensitiveContains(query) })
+            {
+                return thread.id
+            }
+            return nil
+        }
+    }
+
+    private func refreshTokenEstimate(for threadID: UUID?, immediate: Bool) {
+        guard let threadID else { return }
+
+        if immediate {
+            tokenEstimateRefreshWorkItem?.cancel()
+            tokenEstimateRefreshWorkItem = nil
+            refreshTokenEstimateNow(for: threadID)
+            return
+        }
+
+        guard tokenEstimateRefreshWorkItem == nil else { return }
+
+        let workItem = DispatchWorkItem { [self] in
+            tokenEstimateRefreshWorkItem = nil
+            refreshTokenEstimateNow(for: threadID)
+        }
+        tokenEstimateRefreshWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: workItem)
+    }
+
+    private func refreshTokenEstimateNow(for threadID: UUID) {
+        guard let idx = threads.firstIndex(where: { $0.id == threadID }) else { return }
+        let messages = threads[idx].messages
+        let fingerprint = tokenEstimateFingerprint(for: messages)
+
+        if tokenEstimateFingerprintByThread[threadID] == fingerprint {
+            return
+        }
+
+        estimatedTokensByThread[threadID] = TokenEstimator.estimateTotalTokens(for: messages)
+        tokenEstimateFingerprintByThread[threadID] = fingerprint
+    }
+
+    private func tokenEstimateFingerprint(for messages: [ChatMessage]) -> Int {
+        var hasher = Hasher()
+        hasher.combine(messages.count)
+        if let last = messages.last {
+            hasher.combine(last.id)
+            hasher.combine(last.text.count)
+            hasher.combine(last.attachments.count)
+            hasher.combine(last.toolCalls?.count ?? 0)
+        }
+        return hasher.finalize()
+    }
+
     private func persistChats(_ threads: [ChatThread]) {
         do {
-            try ChatPersistence.save(threads)
+            var nextFingerprints = persistedThreadFingerprintByID
+            let currentIDs = Set(threads.map(\.id))
+
+            for removedID in Set(nextFingerprints.keys).subtracting(currentIDs) {
+                try ChatPersistence.deleteThread(id: removedID)
+                nextFingerprints.removeValue(forKey: removedID)
+            }
+
+            for thread in threads {
+                let fingerprint = threadPersistenceFingerprint(thread)
+                if nextFingerprints[thread.id] != fingerprint {
+                    try ChatPersistence.saveThread(thread)
+                    nextFingerprints[thread.id] = fingerprint
+                }
+            }
+
+            let indexEntries = threads.map { ChatIndexEntry(from: $0) }
+            try ChatPersistence.saveIndex(indexEntries)
+            persistedThreadFingerprintByID = nextFingerprints
         } catch {
             statusMessage = "Failed saving chats: \(error.localizedDescription)"
         }
+    }
+
+    private func threadPersistenceFingerprint(_ thread: ChatThread) -> Int {
+        var hasher = Hasher()
+        hasher.combine(thread.id)
+        hasher.combine(thread.title)
+        hasher.combine(thread.agentEnabled)
+        hasher.combine(thread.dangerousMode)
+        hasher.combine(thread.workingDirectory ?? "")
+        hasher.combine(thread.systemPrompt ?? "")
+        hasher.combine(thread.modelReference ?? "")
+
+        if let usage = thread.tokenUsage {
+            hasher.combine(usage.estimatedTokens)
+            hasher.combine(usage.actualTokens ?? -1)
+            hasher.combine(usage.contextWindow)
+            hasher.combine(usage.lastUpdated.timeIntervalSince1970)
+        } else {
+            hasher.combine(-1)
+        }
+
+        hasher.combine(thread.messages.count)
+        if let last = thread.messages.last {
+            hasher.combine(last.id)
+            hasher.combine(last.role.rawValue)
+            hasher.combine(last.text.count)
+            hasher.combine(last.attachments.count)
+            hasher.combine(last.toolCalls?.count ?? 0)
+            hasher.combine(last.toolCallID ?? "")
+            hasher.combine(last.toolName ?? "")
+            hasher.combine(last.timestamp.timeIntervalSince1970)
+        }
+
+        return hasher.finalize()
     }
 
     private func schedulePersist(_ threads: [ChatThread]) {
@@ -999,8 +1547,29 @@ struct ContentView: View {
             migrateLegacyOpenAICompatibleConfigIfNeeded()
             loadOpenAICompatibleTokensFromKeychain()
             syncOpenAICompatibleTokensToKeychain()
+            canMigrateLegacyKeys = try KeychainStore.legacyStoreHasKeysMissingFromKeychain()
         } catch {
             statusMessage = "Failed loading API keys: \(error.localizedDescription)"
+        }
+    }
+
+    private func migrateLegacyKeysToKeychain() {
+        do {
+            let result = try KeychainStore.migrateLegacyFileStoreToKeychain(removeLegacyFile: true)
+            canMigrateLegacyKeys = try KeychainStore.legacyStoreHasKeysMissingFromKeychain()
+            loadAPIKeysFromKeychain()
+
+            if result.migratedKeys > 0 {
+                statusMessage =
+                    "Migrated \(result.migratedKeys) key(s) to Keychain and removed legacy store."
+            } else if result.totalKeys > 0 {
+                statusMessage =
+                    "No keys migrated (already in Keychain or empty). Legacy store removed."
+            } else {
+                statusMessage = "No legacy keys found to migrate."
+            }
+        } catch {
+            statusMessage = "Failed migrating legacy keys: \(error.localizedDescription)"
         }
     }
 
@@ -1390,6 +1959,21 @@ struct ContentView: View {
                 ? mcpManager.tools + AgentTools.definitions()
                 : mcpManager.tools + AgentTools.fetchDefinitions())
 
+        let skillActivation: HumlexSkillActivation = {
+            let latestUserText =
+                threads[idx].messages.last(where: { $0.role == .user })?.text ?? ""
+            return HumlexSkillCatalog.activate(from: latestUserText, workingDirectory: workDir)
+        }()
+
+        if !skillActivation.activeSkills.isEmpty {
+            let names = skillActivation.activeSkills.map(\.name).joined(separator: ", ")
+            toastManager.show(.info("Skills active: \(names)", icon: "sparkles"))
+        }
+        if !skillActivation.missingSkillNames.isEmpty {
+            statusMessage =
+                "Skills not found: \(skillActivation.missingSkillNames.joined(separator: ", "))."
+        }
+
         for _ in 0..<maxToolIterations {
             // Build history from current thread messages
             guard let currentIdx = threads.firstIndex(where: { $0.id == threadID }) else { return }
@@ -1456,6 +2040,10 @@ struct ContentView: View {
                     - timeout: Timeout in seconds (default 30, max 60)
                     """
                 systemPromptParts.append(fetchPrompt)
+            }
+
+            if let skillPrompt = skillActivation.systemPromptBlock, !skillPrompt.isEmpty {
+                systemPromptParts.append(skillPrompt)
             }
 
             // Insert combined system prompt at the beginning of history
@@ -2636,13 +3224,16 @@ struct ContentView: View {
     @ViewBuilder
     private func messageRow(for message: ChatMessage, lastAssistantID: UUID?) -> some View {
         let isLastAssistant = message.role == .assistant && message.id == lastAssistantID
+        let isAgentModeForThread = selectedThreadIndex.map { threads[$0].agentEnabled } ?? false
         MessageRow(
             message: message,
             isStreaming: message.id == streamingMessageID,
+            isAgentMode: isAgentModeForThread,
             isLastAssistant: isLastAssistant && !isSending
         ) {
             retryLastResponse()
         }
+        .equatable()
     }
 }
 

@@ -1,69 +1,184 @@
 import Foundation
+import Security
 
-/// Stores API keys in a JSON file under Application Support/Humlex.
-/// Replaces the macOS Keychain approach to avoid password prompts with unsigned builds.
+struct KeychainMigrationResult {
+    let totalKeys: Int
+    let migratedKeys: Int
+    let skippedExistingKeys: Int
+    let skippedEmptyKeys: Int
+}
+
+/// Stores secrets in the macOS Keychain.
 enum KeychainStore {
-    private static let fileName = "secrets.json"
-
-    private static var fileURL: URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let appDir = appSupport.appendingPathComponent("Humlex")
-        return appDir.appendingPathComponent(fileName)
-    }
+    private static let service = "com.local.humlex"
+    private static let legacyFileName = "secrets.json"
 
     static func loadString(for key: String) throws -> String? {
-        let store = try loadStore()
-        return store[key]
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        switch status {
+        case errSecSuccess:
+            guard let data = item as? Data else {
+                throw KeychainError.invalidItemData
+            }
+            return String(data: data, encoding: .utf8)
+        case errSecItemNotFound:
+            return nil
+        default:
+            throw KeychainError.unhandledStatus(status)
+        }
     }
 
     static func saveString(_ value: String, for key: String) throws {
-        var store = (try? loadStore()) ?? [:]
-        store[key] = value
-        try saveStore(store)
+        let data = Data(value.utf8)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+        ]
+
+        let updateAttrs: [String: Any] = [
+            kSecValueData as String: data
+        ]
+
+        let updateStatus = SecItemUpdate(query as CFDictionary, updateAttrs as CFDictionary)
+        switch updateStatus {
+        case errSecSuccess:
+            return
+        case errSecItemNotFound:
+            var addQuery = query
+            addQuery[kSecValueData as String] = data
+            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+            guard addStatus == errSecSuccess else {
+                throw KeychainError.unhandledStatus(addStatus)
+            }
+        default:
+            throw KeychainError.unhandledStatus(updateStatus)
+        }
     }
 
     static func deleteValue(for key: String) throws {
-        var store = (try? loadStore()) ?? [:]
-        store.removeValue(forKey: key)
-        try saveStore(store)
-    }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+        ]
 
-    // MARK: - Private
-
-    private static func loadStore() throws -> [String: String] {
-        let url = fileURL
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            return [:]
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw KeychainError.unhandledStatus(status)
         }
-        let data = try Data(contentsOf: url)
-        return try JSONDecoder().decode([String: String].self, from: data)
     }
 
-    private static func saveStore(_ store: [String: String]) throws {
-        let url = fileURL
-        let dir = url.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    static func legacyStoreExists() -> Bool {
+        guard FileManager.default.fileExists(atPath: legacyFileURL.path) else {
+            return false
+        }
+        guard let data = try? Data(contentsOf: legacyFileURL),
+            let store = try? JSONDecoder().decode([String: String].self, from: data)
+        else {
+            return false
+        }
+        return !store.isEmpty
+    }
 
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(store)
-        try data.write(to: url, options: [.atomic])
+    static func legacyStoreHasKeysMissingFromKeychain() throws -> Bool {
+        guard FileManager.default.fileExists(atPath: legacyFileURL.path) else {
+            return false
+        }
 
-        // Set file permissions to owner-only read/write (600)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: url.path
+        let data = try Data(contentsOf: legacyFileURL)
+        let store = try JSONDecoder().decode([String: String].self, from: data)
+
+        for (key, rawValue) in store {
+            let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty else { continue }
+
+            let existing = try loadString(for: key)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if existing?.isEmpty != false {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    static func migrateLegacyFileStoreToKeychain(removeLegacyFile: Bool = false) throws
+        -> KeychainMigrationResult
+    {
+        guard FileManager.default.fileExists(atPath: legacyFileURL.path) else {
+            return KeychainMigrationResult(
+                totalKeys: 0,
+                migratedKeys: 0,
+                skippedExistingKeys: 0,
+                skippedEmptyKeys: 0
+            )
+        }
+
+        let data = try Data(contentsOf: legacyFileURL)
+        let store = try JSONDecoder().decode([String: String].self, from: data)
+
+        var migrated = 0
+        var skippedExisting = 0
+        var skippedEmpty = 0
+
+        for (key, rawValue) in store {
+            let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty else {
+                skippedEmpty += 1
+                continue
+            }
+
+            let existing = try loadString(for: key)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let existing, !existing.isEmpty {
+                skippedExisting += 1
+                continue
+            }
+
+            try saveString(value, for: key)
+            migrated += 1
+        }
+
+        if removeLegacyFile {
+            try? FileManager.default.removeItem(at: legacyFileURL)
+        }
+
+        return KeychainMigrationResult(
+            totalKeys: store.count,
+            migratedKeys: migrated,
+            skippedExistingKeys: skippedExisting,
+            skippedEmptyKeys: skippedEmpty
         )
+    }
+
+    private static var legacyFileURL: URL {
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first!
+        let appDir = appSupport.appendingPathComponent("Humlex")
+        return appDir.appendingPathComponent(legacyFileName)
     }
 }
 
 enum KeychainError: LocalizedError {
     case unhandledStatus(OSStatus)
+    case invalidItemData
 
     var errorDescription: String? {
         switch self {
         case .unhandledStatus(let status):
             return "Keychain error (\(status))."
+        case .invalidItemData:
+            return "Keychain returned invalid item data."
         }
     }
 }

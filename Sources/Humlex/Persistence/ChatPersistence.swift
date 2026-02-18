@@ -206,4 +206,18 @@ enum ChatPersistence {
         let entries = threads.map { ChatIndexEntry(from: $0) }
         try saveIndex(entries)
     }
+
+    /// Deletes all persisted chat files and index data.
+    static func wipeAllChats() throws {
+        let dir = try chatsDir()
+        if FileManager.default.fileExists(atPath: dir.path) {
+            try FileManager.default.removeItem(at: dir)
+        }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        let legacy = try legacyFileURL()
+        if FileManager.default.fileExists(atPath: legacy.path) {
+            try FileManager.default.removeItem(at: legacy)
+        }
+    }
 }

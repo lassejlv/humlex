@@ -33,6 +33,21 @@ Simple native macOS AI chat app.
 ./run.sh
 ```
 
+## Skills (skills.sh)
+
+```sh
+# Install community skills for Codex (interactive)
+./skills.sh bootstrap
+
+# Or run any skills CLI command directly
+./skills.sh list
+./skills.sh add vercel-labs/agent-skills
+./skills.sh check
+./skills.sh update
+```
+
+You can also use `just` shortcuts: `just skills-list`, `just skills-check`, `just skills-update`.
+
 ## Build release DMG
 
 ```sh

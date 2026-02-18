@@ -80,7 +80,10 @@ struct MarkdownView: View {
                     codeLines.append(lines[i])
                     i += 1
                 }
-                blocks.append(.codeBlock(language: language, code: codeLines.joined(separator: "\n"), closed: closed))
+                blocks.append(
+                    .codeBlock(
+                        language: language, code: codeLines.joined(separator: "\n"), closed: closed)
+                )
                 continue
             }
 
@@ -144,7 +147,8 @@ struct MarkdownView: View {
                 let lt = l.trimmingCharacters(in: .whitespaces)
                 if lt.isEmpty || l.hasPrefix("```") || parseHeading(l) != nil
                     || isUnorderedListItem(l) || isOrderedListItem(l)
-                    || parseTable(lines: lines, index: i) != nil {
+                    || parseTable(lines: lines, index: i) != nil
+                {
                     break
                 }
                 paraLines.append(l)
@@ -200,7 +204,9 @@ struct MarkdownView: View {
         return String(t[t.index(afterDot, offsetBy: 1)...])
     }
 
-    private func parseTable(lines: [String], index: Int) -> (headers: [String], rows: [[String]], nextIndex: Int)? {
+    private func parseTable(lines: [String], index: Int) -> (
+        headers: [String], rows: [[String]], nextIndex: Int
+    )? {
         guard index + 1 < lines.count else { return nil }
 
         let headerLine = lines[index]
@@ -266,7 +272,8 @@ struct MarkdownView: View {
         if trimmed.hasSuffix("|") {
             trimmed.removeLast()
         }
-        var cells = trimmed
+        var cells =
+            trimmed
             .split(separator: "|", omittingEmptySubsequences: false)
             .map { String($0).trimmingCharacters(in: .whitespaces) }
 
@@ -292,7 +299,9 @@ struct MarkdownView: View {
             renderHeading(level: level, text: text)
 
         case .codeBlock(let language, let code, let closed):
-            CodeBlockView(language: language, code: code, closed: closed, showCursor: isStreaming && isLast && !closed)
+            CodeBlockView(
+                language: language, code: code, closed: closed,
+                showCursor: isStreaming && isLast && !closed)
 
         case .table(let headers, let rows):
             tableView(headers: headers, rows: rows)
@@ -382,12 +391,13 @@ struct MarkdownView: View {
 
     @ViewBuilder
     private func renderHeading(level: Int, text: String) -> some View {
-        let font: Font = switch level {
-        case 1: .title.bold()
-        case 2: .title2.bold()
-        case 3: .title3.bold()
-        default: .headline
-        }
+        let font: Font =
+            switch level {
+            case 1: .title.bold()
+            case 2: .title2.bold()
+            case 3: .title3.bold()
+            default: .headline
+            }
         inlineMarkdown(text)
             .font(font)
             .padding(.top, level <= 2 ? 4 : 2)
@@ -421,6 +431,7 @@ struct CodeBlockView: View {
 
     @Environment(\.appTheme) private var theme
     @Environment(\.toastManager) private var toast
+    @State private var highlightedCode: AttributedString = AttributedString("")
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -445,6 +456,18 @@ struct CodeBlockView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(theme.codeBorder, lineWidth: 1)
         )
+        .onAppear {
+            rebuildHighlightedCode()
+        }
+        .onChange(of: code) { _, _ in
+            rebuildHighlightedCode()
+        }
+        .onChange(of: language) { _, _ in
+            rebuildHighlightedCode()
+        }
+        .onChange(of: theme.id) { _, _ in
+            rebuildHighlightedCode()
+        }
     }
 
     private var header: some View {
@@ -485,17 +508,20 @@ struct CodeBlockView: View {
     }
 
     private var codeContent: some View {
-        let highlighted = SyntaxHighlighter.highlight(code, language: language, theme: theme)
         let display: AttributedString
         if showCursor {
             var cursor = AttributedString(" \u{258D}")
             cursor.foregroundColor = .secondary
             cursor.font = .system(.callout, design: .monospaced)
-            display = highlighted + cursor
+            display = highlightedCode + cursor
         } else {
-            display = highlighted
+            display = highlightedCode
         }
         return Text(display)
             .textSelection(.enabled)
+    }
+
+    private func rebuildHighlightedCode() {
+        highlightedCode = SyntaxHighlighter.highlight(code, language: language, theme: theme)
     }
 }
