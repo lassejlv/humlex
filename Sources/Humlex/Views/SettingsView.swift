@@ -25,6 +25,8 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     @Binding var openAIAPIKey: String
+    @Binding var openAICompatibleProfiles: [OpenAICompatibleProfile]
+    @Binding var openAICompatibleTokens: [String: String]
     @Binding var anthropicAPIKey: String
     @Binding var openRouterAPIKey: String
     @Binding var fastRouterAPIKey: String
@@ -50,11 +52,13 @@ struct SettingsView: View {
     @State private var isLoggingIntoCodex = false
     @AppStorage("experimental_claude_code_enabled") private var isClaudeCodeEnabled = false
     @AppStorage("experimental_codex_enabled") private var isCodexEnabled = false
+    @AppStorage("provider_ollama_enabled") private var isOllamaEnabled = true
     @AppStorage("codex_sandbox_mode") private var codexSandboxModeRaw: String = CodexSandboxMode
         .readOnly.rawValue
     @AppStorage("auto_scroll_enabled") private var isAutoScrollEnabled = true
     @AppStorage("performance_mode_enabled") private var isPerformanceModeEnabled = true
-    @AppStorage("performance_visible_message_limit") private var performanceVisibleMessageLimit = 250
+    @AppStorage("performance_visible_message_limit") private var performanceVisibleMessageLimit =
+        250
     @AppStorage("debug_mode_enabled") private var isDebugModeEnabled = false
     @AppStorage("model_picker_in_toolbar_enabled") private var isModelPickerInToolbarEnabled = false
     @AppStorage("default_system_instructions") private var defaultSystemInstructions: String = ""
@@ -289,18 +293,7 @@ struct SettingsView: View {
     private func providerRow(_ provider: AIProvider) -> some View {
         let isSelected = selectedProvider == provider && selectedTab == settingsTab(for: provider)
         let hasKey: Bool = {
-            if !provider.requiresAPIKey {
-                return true
-            }
-            if provider == .claudeCode {
-                return claudeCodeAvailability?.isAvailable == true
-            }
-            if provider == .openAICodex {
-                return codexAvailability?.isAvailable == true
-            }
-            return !apiKeyBinding(for: provider).wrappedValue.trimmingCharacters(
-                in: .whitespacesAndNewlines
-            ).isEmpty
+            providerHasRequiredCredentials(provider)
         }()
 
         return Button {
@@ -423,6 +416,8 @@ struct SettingsView: View {
                     codexDetailView
                 } else if selectedProvider == .ollama {
                     ollamaDetailView
+                } else if selectedProvider == .openAICompatible {
+                    openAICompatibleDetailView
                 } else {
                     apiKeyField
                 }
@@ -458,6 +453,16 @@ struct SettingsView: View {
 
     private var ollamaDetailView: some View {
         VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Enabled")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(theme.textSecondary)
+                Spacer()
+                Toggle("", isOn: $isOllamaEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
+
             Text("Local Endpoint")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(theme.textSecondary)
@@ -469,15 +474,19 @@ struct SettingsView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(theme.codeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(
+                    theme.codeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .stroke(theme.codeBorder, lineWidth: 1)
                 )
 
-            Text("Ollama runs locally and does not require an API key. Models are fetched from your local Ollama server.")
-                .font(.system(size: 12))
-                .foregroundStyle(theme.textSecondary)
+            Text(
+                "Ollama runs locally and does not require an API key. Models are fetched from your local Ollama server."
+            )
+            .font(.system(size: 12))
+            .foregroundStyle(theme.textSecondary)
         }
     }
 
@@ -850,24 +859,107 @@ struct SettingsView: View {
         }
     }
 
+    private var openAICompatibleDetailView: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Profiles")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(theme.textSecondary)
+
+                Spacer()
+
+                Button {
+                    openAICompatibleProfiles.append(
+                        OpenAICompatibleProfile(
+                            name: "OpenAI Compatible \(openAICompatibleProfiles.count + 1)",
+                            baseURL: ""
+                        )
+                    )
+                } label: {
+                    Label("Add Profile", systemImage: "plus")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            if openAICompatibleProfiles.isEmpty {
+                Text("No profiles yet. Add one with a custom name, endpoint, and bearer token.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.textSecondary)
+            }
+
+            ForEach(Array(openAICompatibleProfiles.indices), id: \.self) { idx in
+                let profileID = openAICompatibleProfiles[idx].id
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Profile \(idx + 1)")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(theme.textPrimary)
+                        Spacer()
+                        Button(role: .destructive) {
+                            openAICompatibleTokens[profileID] = nil
+                            openAICompatibleProfiles.remove(at: idx)
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Remove profile")
+                    }
+
+                    TextField(
+                        "Custom name (e.g. My Local Server)",
+                        text: Binding(
+                            get: { openAICompatibleProfiles[idx].name },
+                            set: { openAICompatibleProfiles[idx].name = $0 }
+                        )
+                    )
+                    .textFieldStyle(.roundedBorder)
+
+                    TextField(
+                        "https://your-host.example.com/v1",
+                        text: Binding(
+                            get: { openAICompatibleProfiles[idx].baseURL },
+                            set: { openAICompatibleProfiles[idx].baseURL = $0 }
+                        )
+                    )
+                    .textFieldStyle(.roundedBorder)
+
+                    SecureField(
+                        "Bearer token",
+                        text: Binding(
+                            get: { openAICompatibleTokens[profileID] ?? "" },
+                            set: { openAICompatibleTokens[profileID] = $0 }
+                        )
+                    )
+                    .textFieldStyle(.roundedBorder)
+                }
+                .padding(12)
+                .background(
+                    theme.surfaceBackground,
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(theme.composerBorder, lineWidth: 1)
+                )
+            }
+
+            Text("Supports OpenAI-style APIs. If `/v1` is omitted, it is added automatically.")
+                .font(.system(size: 12))
+                .foregroundStyle(theme.textSecondary)
+        }
+    }
+
     @ViewBuilder
     private var statusBadge: some View {
         let count = modelCounts[selectedProvider] ?? 0
-        let isEnabled = !isExperimentalProvider(selectedProvider)
+        let isEnabled =
+            !isExperimentalProvider(selectedProvider)
             || experimentalToggleBinding(for: selectedProvider).wrappedValue
         let hasKey: Bool = {
-            if !selectedProvider.requiresAPIKey {
-                return true
-            }
-            if selectedProvider == .claudeCode {
-                return claudeCodeAvailability?.isAvailable == true
-            }
-            if selectedProvider == .openAICodex {
-                return codexAvailability?.isAvailable == true
-            }
-            return !apiKeyBinding(for: selectedProvider).wrappedValue.trimmingCharacters(
-                in: .whitespacesAndNewlines
-            ).isEmpty
+            providerHasRequiredCredentials(selectedProvider)
         }()
 
         if !isEnabled {
@@ -1464,9 +1556,9 @@ struct SettingsView: View {
                 Text("System Instructions")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(theme.textPrimary)
-                
+
                 Spacer()
-                
+
                 if !defaultSystemInstructions.isEmpty {
                     Button {
                         defaultSystemInstructions = ""
@@ -1482,18 +1574,20 @@ struct SettingsView: View {
             .padding(.horizontal, 24)
             .padding(.top, 20)
             .padding(.bottom, 16)
-            
+
             // Description
             VStack(alignment: .leading, spacing: 8) {
-                Text("These instructions will be used as the default system prompt for all new chats. They define how the AI should behave and respond.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(theme.textSecondary)
-                    .lineLimit(nil)
-                    .fixedSize(horizontal: false, vertical: true)
+                Text(
+                    "These instructions will be used as the default system prompt for all new chats. They define how the AI should behave and respond."
+                )
+                .font(.system(size: 12))
+                .foregroundStyle(theme.textSecondary)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 16)
-            
+
             // Text editor
             TextEditor(text: $defaultSystemInstructions)
                 .font(.system(size: 13))
@@ -1507,7 +1601,7 @@ struct SettingsView: View {
                 )
                 .padding(.horizontal, 24)
                 .frame(maxHeight: .infinity)
-            
+
             Spacer()
         }
         .frame(maxWidth: .infinity)
@@ -1540,11 +1634,13 @@ struct SettingsView: View {
                                     .font(.system(size: 14, weight: .medium))
                                     .foregroundStyle(theme.textPrimary)
 
-                                Text("Automatically scroll to new messages during streaming. When disabled, you'll need to scroll manually.")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(theme.textSecondary)
-                                    .lineLimit(nil)
-                                    .fixedSize(horizontal: false, vertical: true)
+                                Text(
+                                    "Automatically scroll to new messages during streaming. When disabled, you'll need to scroll manually."
+                                )
+                                .font(.system(size: 12))
+                                .foregroundStyle(theme.textSecondary)
+                                .lineLimit(nil)
+                                .fixedSize(horizontal: false, vertical: true)
                             }
 
                             Spacer()
@@ -1560,9 +1656,11 @@ struct SettingsView: View {
                                     .font(.system(size: 11))
                                     .foregroundStyle(theme.textTertiary)
 
-                                Text("Scrolling up will pause auto-scroll until you scroll back to the bottom")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(theme.textTertiary)
+                                Text(
+                                    "Scrolling up will pause auto-scroll until you scroll back to the bottom"
+                                )
+                                .font(.system(size: 11))
+                                .foregroundStyle(theme.textTertiary)
                             }
                             .padding(.leading, 36)
                         }
@@ -1590,17 +1688,21 @@ struct SettingsView: View {
                                     .font(.system(size: 14, weight: .medium))
                                     .foregroundStyle(theme.textPrimary)
 
-                                Text("How many recent messages stay mounted before older messages are collapsed behind \"Load older messages\".")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(theme.textSecondary)
-                                    .lineLimit(nil)
-                                    .fixedSize(horizontal: false, vertical: true)
+                                Text(
+                                    "How many recent messages stay mounted before older messages are collapsed behind \"Load older messages\"."
+                                )
+                                .font(.system(size: 12))
+                                .foregroundStyle(theme.textSecondary)
+                                .lineLimit(nil)
+                                .fixedSize(horizontal: false, vertical: true)
                             }
 
                             Spacer()
                         }
 
-                        Picker("Messages to keep visible", selection: $performanceVisibleMessageLimit) {
+                        Picker(
+                            "Messages to keep visible", selection: $performanceVisibleMessageLimit
+                        ) {
                             Text("100").tag(100)
                             Text("250").tag(250)
                             Text("500").tag(500)
@@ -1644,11 +1746,13 @@ struct SettingsView: View {
                                     .font(.system(size: 14, weight: .medium))
                                     .foregroundStyle(theme.textPrimary)
 
-                                Text("Improve large chat responsiveness by rendering recent messages first and loading older messages on demand.")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(theme.textSecondary)
-                                    .lineLimit(nil)
-                                    .fixedSize(horizontal: false, vertical: true)
+                                Text(
+                                    "Improve large chat responsiveness by rendering recent messages first and loading older messages on demand."
+                                )
+                                .font(.system(size: 12))
+                                .foregroundStyle(theme.textSecondary)
+                                .lineLimit(nil)
+                                .fixedSize(horizontal: false, vertical: true)
                             }
 
                             Spacer()
@@ -1664,9 +1768,11 @@ struct SettingsView: View {
                                     .font(.system(size: 11))
                                     .foregroundStyle(theme.textTertiary)
 
-                                Text("Older messages are available with \"Load older messages\" above the chat.")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(theme.textTertiary)
+                                Text(
+                                    "Older messages are available with \"Load older messages\" above the chat."
+                                )
+                                .font(.system(size: 11))
+                                .foregroundStyle(theme.textTertiary)
                             }
                             .padding(.leading, 36)
                         }
@@ -1694,11 +1800,13 @@ struct SettingsView: View {
                                     .font(.system(size: 14, weight: .medium))
                                     .foregroundStyle(theme.textPrimary)
 
-                                Text("Move model selection from the composer to the top toolbar next to Settings.")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(theme.textSecondary)
-                                    .lineLimit(nil)
-                                    .fixedSize(horizontal: false, vertical: true)
+                                Text(
+                                    "Move model selection from the composer to the top toolbar next to Settings."
+                                )
+                                .font(.system(size: 12))
+                                .foregroundStyle(theme.textSecondary)
+                                .lineLimit(nil)
+                                .fixedSize(horizontal: false, vertical: true)
                             }
 
                             Spacer()
@@ -1731,11 +1839,13 @@ struct SettingsView: View {
                                     .font(.system(size: 14, weight: .medium))
                                     .foregroundStyle(theme.textPrimary)
 
-                                Text("Show a live banner with FPS, CPU, and memory usage to diagnose UI performance.")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(theme.textSecondary)
-                                    .lineLimit(nil)
-                                    .fixedSize(horizontal: false, vertical: true)
+                                Text(
+                                    "Show a live banner with FPS, CPU, and memory usage to diagnose UI performance."
+                                )
+                                .font(.system(size: 12))
+                                .foregroundStyle(theme.textSecondary)
+                                .lineLimit(nil)
+                                .fixedSize(horizontal: false, vertical: true)
                             }
 
                             Spacer()
@@ -1825,6 +1935,7 @@ struct SettingsView: View {
     private func apiKeyBinding(for provider: AIProvider) -> Binding<String> {
         switch provider {
         case .openAI: return $openAIAPIKey
+        case .openAICompatible: return .constant("")
         case .anthropic: return $anthropicAPIKey
         case .openRouter: return $openRouterAPIKey
         case .fastRouter: return $fastRouterAPIKey
@@ -1835,6 +1946,36 @@ struct SettingsView: View {
         case .claudeCode: return .constant("")  // Claude Code doesn't use an API key
         case .openAICodex: return .constant("")  // Codex doesn't use an API key
         }
+    }
+
+    private func providerHasRequiredCredentials(_ provider: AIProvider) -> Bool {
+        if !provider.requiresAPIKey {
+            return true
+        }
+        if provider == .claudeCode {
+            return claudeCodeAvailability?.isAvailable == true
+        }
+        if provider == .openAICodex {
+            return codexAvailability?.isAvailable == true
+        }
+
+        let hasKey = !apiKeyBinding(for: provider).wrappedValue.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ).isEmpty
+
+        if provider == .openAICompatible {
+            return openAICompatibleProfiles.contains { profile in
+                let hasEndpoint = !profile.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .isEmpty
+                let hasToken =
+                    !(openAICompatibleTokens[profile.id] ?? "").trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                    ).isEmpty
+                return hasEndpoint && hasToken
+            }
+        }
+
+        return hasKey
     }
 
     private func providers(for tab: SettingsTab) -> [AIProvider] {

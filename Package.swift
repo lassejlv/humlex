@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "AIChat",
+    name: "Humlex",
     platforms: [.macOS(.v14)],
     dependencies: [
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.0.0"),
@@ -10,16 +10,12 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "AIChat",
+            name: "Humlex",
             dependencies: [
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "ClaudeCodeSDK", package: "ClaudeCodeSDK"),
             ],
-            path: ".",
-            exclude: [
-                "run.sh", "build-dmg.sh", "Assets.xcassets", "README.md", ".github", "docs",
-                "website", "AGENTS.md",
-            ],
+            path: "Sources/Humlex",
             resources: [
                 .process("assets")
             ],
