@@ -7,28 +7,28 @@
     <language>en</language>
     <item>
       <title>Version 0.1.28 (Apple Silicon)</title>
-      <pubDate>Thu, 19 Feb 2026 01:39:12 +0000</pubDate>
+      <pubDate>Thu, 19 Feb 2026 01:43:46 +0000</pubDate>
       <sparkle:version>0.1.28</sparkle:version>
       <sparkle:shortVersionString>0.1.28</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <enclosure
         url="https://github.com/lassejlv/humlex/releases/download/v0.1.28/Humlex-0.1.28-arm64.dmg"
-        sparkle:edSignature="TPZULbO5ZcqgyG005ZjiWdWLCcPaw06MCKRcsBKGZZ0hJCNp48JPAqwvV/OM8FOok2YqiyBTkct9zTCRQtT7AQ=="
-        length="3781662"
+        sparkle:edSignature="teRRJ0M/KXITQ+5p0nqyIA3TJtCBs2TgfrFRXIpOAL4M5nzE2HajGkyrv6e3/+NAq55VL0b8jSLeZR5arWi0Bw=="
+        length="3781686"
         type="application/octet-stream"
         sparkle:os="macos"
       />
     </item>
     <item>
       <title>Version 0.1.28 (Intel)</title>
-      <pubDate>Thu, 19 Feb 2026 01:39:12 +0000</pubDate>
+      <pubDate>Thu, 19 Feb 2026 01:43:46 +0000</pubDate>
       <sparkle:version>0.1.28</sparkle:version>
       <sparkle:shortVersionString>0.1.28</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <enclosure
         url="https://github.com/lassejlv/humlex/releases/download/v0.1.28/Humlex-0.1.28-x86_64.dmg"
-        sparkle:edSignature="8DQ4g/IHLLmnoYAH+O54VwkJRZ13Fo++DYUe4t4vVRHs5JxOHAVQlNJHkKtoltyDBYIkmhfdQcYj9IPYfWoXAw=="
-        length="3930246"
+        sparkle:edSignature="RQCz2fxwCacRLb/p7DUDVbvzoiIN36oDA/zsiKttAnB/3+8jrtUe/kdxWSuMSsdhBREG+IJV4DB6DXknDI/NBQ=="
+        length="3930255"
         type="application/octet-stream"
         sparkle:os="macos"
       />
