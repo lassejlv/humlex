@@ -7,7 +7,7 @@
     <language>en</language>
     <item>
       <title>Version 0.1.28 (Apple Silicon)</title>
-      <pubDate>Thu, 19 Feb 2026 01:35:54 +0000</pubDate>
+      <pubDate>Thu, 19 Feb 2026 01:39:12 +0000</pubDate>
       <sparkle:version>0.1.28</sparkle:version>
       <sparkle:shortVersionString>0.1.28</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
@@ -21,7 +21,7 @@
     </item>
     <item>
       <title>Version 0.1.28 (Intel)</title>
-      <pubDate>Thu, 19 Feb 2026 01:35:54 +0000</pubDate>
+      <pubDate>Thu, 19 Feb 2026 01:39:12 +0000</pubDate>
       <sparkle:version>0.1.28</sparkle:version>
       <sparkle:shortVersionString>0.1.28</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
