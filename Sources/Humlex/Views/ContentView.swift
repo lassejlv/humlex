@@ -27,7 +27,7 @@ struct ContentView: View {
     @AppStorage("performance_visible_message_limit") private var performanceVisibleMessageLimit =
         250
     @AppStorage("debug_mode_enabled") private var isDebugModeEnabled = false
-    @AppStorage("model_picker_in_toolbar_enabled") private var isModelPickerInToolbarEnabled = false
+    @AppStorage("has_seen_onboarding_v1") private var hasSeenOnboarding = false
 
     @State private var models: [LLMModel] = []
     @State private var isLoadingModels = false
@@ -78,6 +78,7 @@ struct ContentView: View {
     @State private var tokenEstimateRefreshWorkItem: DispatchWorkItem?
     @State private var tokenEstimateFingerprintByThread: [UUID: Int] = [:]
     @State private var estimatedTokensByThread: [UUID: Int] = [:]
+    @State private var isShowingOnboarding = false
 
     // MARK: - Streaming Batching
     /// Buffers streaming text deltas to batch UI updates (reduces per-token lag)
@@ -260,6 +261,7 @@ struct ContentView: View {
         let dialogs =
             base
             .sheet(isPresented: $isShowingSettings) { settingsSheet }
+            .sheet(isPresented: $isShowingOnboarding) { onboardingSheet }
             .alert(
                 "Delete Chat",
                 isPresented: Binding(
@@ -327,6 +329,12 @@ struct ContentView: View {
 
                 if isDebugModeEnabled {
                     debugPerformanceMonitor.start()
+                }
+
+                if !hasSeenOnboarding {
+                    DispatchQueue.main.async {
+                        isShowingOnboarding = true
+                    }
                 }
             }
             .onDisappear {
@@ -464,10 +472,6 @@ struct ContentView: View {
                 }
                 .labelStyle(.iconOnly)
                 .help("Settings")
-
-                if isModelPickerInToolbarEnabled {
-                    modelPickerToolbarMenu
-                }
             }
         }
     }
@@ -537,7 +541,7 @@ struct ContentView: View {
     }
 
     private var chatCanvasBackground: some View {
-        theme.background
+        Color.clear
     }
 
     private var isAppBusy: Bool {
@@ -808,7 +812,6 @@ struct ContentView: View {
             attachments: $pendingAttachments,
             models: models,
             selectedModelReference: $selectedModelReference,
-            showInlineModelPicker: !isModelPickerInToolbarEnabled,
             agentEnabled: agentEnabledBinding,
             dangerousMode: dangerousModeBinding,
             workingDirectory: workingDirectoryBinding,
@@ -856,38 +859,28 @@ struct ContentView: View {
         }
     }
 
-    private var modelPickerToolbarMenu: some View {
-        Menu {
-            if models.isEmpty {
-                Text("No models loaded")
-            } else {
-                ForEach(models, id: \.reference) { model in
-                    Button {
-                        selectedModelReference = model.reference
-                    } label: {
-                        if model.reference == selectedModelReference {
-                            Label(model.displayName, systemImage: "checkmark")
-                        } else {
-                            Text(model.displayName)
-                        }
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Text(selectedModelLabel)
-                    .lineLimit(1)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-            }
+    private var onboardingSheet: some View {
+        OnboardingView {
+            completeOnboarding(openSettings: true)
+        } onGetStarted: {
+            completeOnboarding(openSettings: false)
         }
-        .help("Select model")
     }
 
     private func createThread() {
         let thread = ChatThread(id: UUID(), title: "New Chat", messages: [])
         threads.insert(thread, at: 0)
         selectedThreadID = thread.id
+    }
+
+    private func completeOnboarding(openSettings: Bool) {
+        hasSeenOnboarding = true
+        isShowingOnboarding = false
+
+        guard openSettings else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            isShowingSettings = true
+        }
     }
 
     private func clearAllChats(showToast: Bool) {

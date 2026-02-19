@@ -23,6 +23,7 @@ struct HumlexApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .frame(minWidth: 980, minHeight: 680)
                 .forceQuitShortcut()
                 .overlay(alignment: .top) {
                     ToastOverlay(manager: toastManager)
@@ -40,6 +41,7 @@ struct HumlexApp: App {
                     updateAppearance(for: theme)
                 }
         }
+        .defaultSize(width: 1240, height: 820)
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
             CommandGroup(replacing: .appSettings) {

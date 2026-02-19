@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://humlex.dev/schemas/theme.schema.json",
+  "title": "Humlex Theme Import Schema",
+  "description": "Schema for custom themes imported into Humlex.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/theme"
+    },
+    {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/theme"
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "themes"
+      ],
+      "properties": {
+        "themes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/theme"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "hexColor": {
+      "type": "string",
+      "description": "Hex color string accepted by Humlex importer: RGB, RGBA, RRGGBB, or RRGGBBAA with optional #/0x prefix.",
+      "pattern": "^(#|0x|0X)?([A-Fa-f0-9]{3}|[A-Fa-f0-9]{4}|[A-Fa-f0-9]{6}|[A-Fa-f0-9]{8})$"
+    },
+    "themeColors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "background",
+        "sidebarBackground",
+        "surfaceBackground",
+        "divider",
+        "textPrimary",
+        "textSecondary",
+        "textTertiary",
+        "accent",
+        "selectionBackground",
+        "hoverBackground",
+        "userBubble",
+        "userBubbleText",
+        "assistantBackground",
+        "composerBackground",
+        "composerBorder",
+        "composerBorderFocused",
+        "codeBackground",
+        "codeBorder",
+        "codeHeaderBackground",
+        "syntaxKeyword",
+        "syntaxString",
+        "syntaxComment",
+        "syntaxNumber",
+        "syntaxType",
+        "syntaxFunction",
+        "syntaxPunctuation",
+        "syntaxPlain",
+        "chipBackground",
+        "chipBorder"
+      ],
+      "properties": {
+        "background": { "$ref": "#/$defs/hexColor" },
+        "sidebarBackground": { "$ref": "#/$defs/hexColor" },
+        "surfaceBackground": { "$ref": "#/$defs/hexColor" },
+        "divider": { "$ref": "#/$defs/hexColor" },
+        "textPrimary": { "$ref": "#/$defs/hexColor" },
+        "textSecondary": { "$ref": "#/$defs/hexColor" },
+        "textTertiary": { "$ref": "#/$defs/hexColor" },
+        "accent": { "$ref": "#/$defs/hexColor" },
+        "selectionBackground": { "$ref": "#/$defs/hexColor" },
+        "hoverBackground": { "$ref": "#/$defs/hexColor" },
+        "userBubble": { "$ref": "#/$defs/hexColor" },
+        "userBubbleText": { "$ref": "#/$defs/hexColor" },
+        "assistantBackground": { "$ref": "#/$defs/hexColor" },
+        "composerBackground": { "$ref": "#/$defs/hexColor" },
+        "composerBorder": { "$ref": "#/$defs/hexColor" },
+        "composerBorderFocused": { "$ref": "#/$defs/hexColor" },
+        "codeBackground": { "$ref": "#/$defs/hexColor" },
+        "codeBorder": { "$ref": "#/$defs/hexColor" },
+        "codeHeaderBackground": { "$ref": "#/$defs/hexColor" },
+        "syntaxKeyword": { "$ref": "#/$defs/hexColor" },
+        "syntaxString": { "$ref": "#/$defs/hexColor" },
+        "syntaxComment": { "$ref": "#/$defs/hexColor" },
+        "syntaxNumber": { "$ref": "#/$defs/hexColor" },
+        "syntaxType": { "$ref": "#/$defs/hexColor" },
+        "syntaxFunction": { "$ref": "#/$defs/hexColor" },
+        "syntaxPunctuation": { "$ref": "#/$defs/hexColor" },
+        "syntaxPlain": { "$ref": "#/$defs/hexColor" },
+        "chipBackground": { "$ref": "#/$defs/hexColor" },
+        "chipBorder": { "$ref": "#/$defs/hexColor" }
+      }
+    },
+    "theme": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "colors"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional unique theme id. If omitted, Humlex derives one from the name."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prefersDarkAppearance": {
+          "type": "boolean",
+          "description": "Defaults to true if omitted."
+        },
+        "colors": {
+          "$ref": "#/$defs/themeColors"
+        }
+      }
+    }
+  }
+}

@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum SettingsTab: String, CaseIterable, Identifiable {
     case general = "General"
@@ -70,7 +71,6 @@ struct SettingsView: View {
     @AppStorage("performance_visible_message_limit") private var performanceVisibleMessageLimit =
         250
     @AppStorage("debug_mode_enabled") private var isDebugModeEnabled = false
-    @AppStorage("model_picker_in_toolbar_enabled") private var isModelPickerInToolbarEnabled = false
     @AppStorage("default_system_instructions") private var defaultSystemInstructions: String = ""
     @AppStorage("chat_font_size") private var chatFontSize = 13.0
 
@@ -87,11 +87,15 @@ struct SettingsView: View {
     @State private var skillSearchRoots: [String] = []
     @State private var isRefreshingSkills = false
     @State private var skillsFilterText: String = ""
+    @State private var themeImportStatusMessage: String?
+    @State private var isThemeImportError = false
 
     private var activeSectionTitle: String {
         switch selectedTab {
-        case .providers, .experimental:
-            return selectedProvider.rawValue
+        case .providers:
+            return "Providers"
+        case .experimental:
+            return "Experimental"
         case .mcp:
             return "MCP Servers"
         case .general:
@@ -275,9 +279,9 @@ struct SettingsView: View {
         case .skills:
             skillsDetail
         case .providers:
-            providerDetail
+            providerOverviewDetail
         case .experimental:
-            providerDetail
+            providerOverviewDetail
         case .mcp:
             mcpDetail
         case .theme:
@@ -291,18 +295,13 @@ struct SettingsView: View {
 
     private var settingsSidebar: some View {
         let generalTabs: [SettingsTab] = [.general, .skills, .theme, .systemInstructions]
+        let aiTabs: [SettingsTab] = [.providers, .experimental]
         let filteredGeneralTabs = generalTabs.filter { matchesSettingsSearch($0.rawValue) }
-        let filteredProviderTabs = providers(for: .providers).filter {
-            matchesSettingsSearch($0.rawValue)
-        }
-        let filteredExperimentalTabs = providers(for: .experimental).filter {
-            matchesSettingsSearch($0.rawValue)
-        }
+        let filteredAITabs = aiTabs.filter { matchesSettingsSearch($0.rawValue) }
         let showIntegrations = matchesSettingsSearch(SettingsTab.mcp.rawValue)
         let hasAnySidebarResult =
             !filteredGeneralTabs.isEmpty
-            || !filteredProviderTabs.isEmpty
-            || !filteredExperimentalTabs.isEmpty
+            || !filteredAITabs.isEmpty
             || showIntegrations
 
         return ScrollView {
@@ -320,20 +319,11 @@ struct SettingsView: View {
                     }
                 }
 
-                if !filteredProviderTabs.isEmpty {
+                if !filteredAITabs.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
-                        sidebarSectionTitle("Providers")
-                        ForEach(filteredProviderTabs) { provider in
-                            sidebarProviderButton(provider, in: .providers)
-                        }
-                    }
-                }
-
-                if !filteredExperimentalTabs.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        sidebarSectionTitle("Experimental")
-                        ForEach(filteredExperimentalTabs) { provider in
-                            sidebarProviderButton(provider, in: .experimental)
+                        sidebarSectionTitle("AI")
+                        ForEach(filteredAITabs) { tab in
+                            sidebarTabButton(tab)
                         }
                     }
                 }
@@ -350,7 +340,7 @@ struct SettingsView: View {
                         Text("No matches")
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(theme.textSecondary)
-                        Text("Try a provider or section name.")
+                        Text("Try a section name.")
                             .font(.system(size: 12))
                             .foregroundStyle(theme.textTertiary)
                     }
@@ -402,35 +392,63 @@ struct SettingsView: View {
         .buttonStyle(.plain)
     }
 
-    private func sidebarProviderButton(_ provider: AIProvider, in tab: SettingsTab) -> some View {
+    // MARK: - Provider Detail
+
+    private var providerOverviewDetail: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(
+                    selectedTab == .experimental
+                        ? "Experimental provider overview"
+                        : "Provider overview"
+                )
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(theme.textTertiary)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(providers(for: selectedTab)) { provider in
+                            providerOverviewChip(provider, in: selectedTab)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 14)
+            .padding(.bottom, 12)
+
+            settingsBorderColor.opacity(0.7).frame(height: 1)
+
+            providerDetail
+        }
+    }
+
+    private func providerOverviewChip(_ provider: AIProvider, in tab: SettingsTab) -> some View {
         let isSelected = selectedProvider == provider && selectedTab == tab
         let isEnabled = experimentalToggleBinding(for: provider).wrappedValue
         let hasKey = providerHasRequiredCredentials(provider)
 
         return Button {
             withAnimation(.easeInOut(duration: 0.15)) {
-                selectedTab = tab
                 selectedProvider = provider
             }
         } label: {
-            HStack(spacing: 10) {
-                ProviderIcon(slug: provider.iconSlug, size: 16)
+            HStack(spacing: 8) {
+                ProviderIcon(slug: provider.iconSlug, size: 15)
                     .foregroundColor(isSelected ? theme.accent : theme.textSecondary)
-                    .frame(width: 18)
 
                 Text(provider.rawValue)
-                    .font(.system(size: 14))
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
                     .foregroundStyle(
                         tab == .experimental && !isEnabled
                             ? theme.textTertiary
                             : (isSelected ? theme.textPrimary : theme.textSecondary)
                     )
 
-                Spacer()
-
                 if tab == .experimental {
                     Image(systemName: isEnabled ? "bolt.fill" : "bolt.slash")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(isEnabled ? Color.orange : theme.textTertiary)
                 } else {
                     Circle()
@@ -438,17 +456,22 @@ struct SettingsView: View {
                         .frame(width: 7, height: 7)
                 }
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isSelected ? settingsSelectionBackground : Color.clear)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(isSelected ? settingsSelectionBackground : settingsControlBackground)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(
+                        isSelected ? theme.accent.opacity(0.35) : settingsBorderColor.opacity(0.7),
+                        lineWidth: 1
+                    )
             )
         }
         .buttonStyle(.plain)
     }
-
-    // MARK: - Provider Detail
 
     private var providerDetail: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1676,16 +1699,42 @@ struct SettingsView: View {
 
     private var themeDetail: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Theme")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(theme.textPrimary)
+            HStack {
+                Text("Theme")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(theme.textPrimary)
+
+                Spacer()
+
+                Button {
+                    importThemeFromJSON()
+                } label: {
+                    Label("Import JSON", systemImage: "square.and.arrow.down")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 20)
+            .padding(.bottom, 10)
+
+            Text("Import a custom theme from JSON with id/name/prefersDarkAppearance/colors.")
+                .font(.system(size: 12))
+                .foregroundStyle(theme.textTertiary)
                 .padding(.horizontal, 24)
-                .padding(.top, 20)
-                .padding(.bottom, 16)
+                .padding(.bottom, 8)
+
+            if let themeImportStatusMessage {
+                Text(themeImportStatusMessage)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(isThemeImportError ? Color.red : Color.green)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 8)
+            }
 
             ScrollView {
                 VStack(spacing: 12) {
-                    ForEach(AppTheme.allThemes) { t in
+                    ForEach(themeManager.themes) { t in
                         themeCard(t)
                     }
                 }
@@ -1773,6 +1822,27 @@ struct SettingsView: View {
                 RoundedRectangle(cornerRadius: 6)
                     .stroke(t.codeBorder, lineWidth: 1)
             )
+    }
+
+    private func importThemeFromJSON() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.prompt = "Import Theme"
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            let importedCount = try themeManager.importThemes(from: url)
+            themeImportStatusMessage =
+                "Imported \(importedCount) theme\(importedCount == 1 ? "" : "s") from \(url.lastPathComponent)."
+            isThemeImportError = false
+        } catch {
+            themeImportStatusMessage = error.localizedDescription
+            isThemeImportError = true
+        }
     }
 
     // MARK: - System Instructions Detail
@@ -1881,13 +1951,6 @@ struct SettingsView: View {
                             subtitle:
                                 "Render recent messages first and load older messages on demand.",
                             isOn: $isPerformanceModeEnabled,
-                            showDivider: true
-                        )
-                        settingsToggleRow(
-                            title: "Model picker in toolbar",
-                            subtitle:
-                                "Move model selection from composer to the top toolbar.",
-                            isOn: $isModelPickerInToolbarEnabled,
                             showDivider: true
                         )
                         settingsToggleRow(
