@@ -85,6 +85,7 @@ struct ContentView: View {
     @State private var streamBufferMessageID: UUID?
     @State private var streamBufferThreadID: UUID?
     @State private var streamFlushWorkItem: DispatchWorkItem?
+    private let streamFlushInterval: TimeInterval = 0.028
 
     // MARK: - Large Chat Rendering
     /// Per-thread cap for rendered messages to keep long chats responsive.
@@ -446,77 +447,73 @@ struct ContentView: View {
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
                 Button {
+                    createThread()
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .keyboardShortcut("n", modifiers: .command)
+                .labelStyle(.iconOnly)
+                .help("New Chat")
+
+                Button {
                     isShowingSettings = true
                 } label: {
-                    Label("Settings", systemImage: "gearshape")
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 14, weight: .semibold))
                 }
+                .labelStyle(.iconOnly)
                 .help("Settings")
 
                 if isModelPickerInToolbarEnabled {
                     modelPickerToolbarMenu
                 }
-
-                Button {
-                    appUpdater.checkForUpdates()
-                } label: {
-                    Label("Check for Updates", systemImage: "arrow.triangle.2.circlepath")
-                }
-                .disabled(!appUpdater.canCheckForUpdates)
-                .help("Check for Updates")
-
-                if appUpdater.canOpenReleaseNotes {
-                    Button {
-                        appUpdater.openLatestReleaseNotes()
-                    } label: {
-                        Label("Release Notes", systemImage: "doc.text")
-                    }
-                    .help("Open latest release notes")
-                }
-
-                Button {
-                    createThread()
-                } label: {
-                    Label("New Chat", systemImage: "square.and.pencil")
-                }
-                .keyboardShortcut("n", modifiers: .command)
-                .help("New Chat")
             }
         }
     }
 
     private var sidebarView: some View {
-        List(selection: $selectedThreadID) {
-            Section("Chats") {
-                ForEach(filteredThreads) { thread in
-                    let isSelected = thread.id == selectedThreadID
-                    ThreadRow(thread: thread, isSelected: isSelected)
-                        .tag(thread.id as UUID?)
-                        .contextMenu {
-                            Button {
-                                exportThreadToMarkdown(thread)
-                            } label: {
-                                Label("Export to Markdown", systemImage: "doc.text")
-                            }
+        VStack(spacing: 0) {
+            List(selection: $selectedThreadID) {
+                Section("Chats") {
+                    ForEach(filteredThreads) { thread in
+                        let isSelected = thread.id == selectedThreadID
+                        ThreadRow(thread: thread, isSelected: isSelected)
+                            .tag(thread.id as UUID?)
+                            .contextMenu {
+                                Button {
+                                    exportThreadToMarkdown(thread)
+                                } label: {
+                                    Label("Export to Markdown", systemImage: "doc.text")
+                                }
 
-                            Divider()
+                                Divider()
 
-                            Button(role: .destructive) {
-                                threadToDelete = thread
-                            } label: {
-                                Label("Delete", systemImage: "trash")
+                                Button(role: .destructive) {
+                                    threadToDelete = thread
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
                             }
-                        }
+                    }
                 }
             }
-        }
-        .listStyle(.sidebar)
-        .searchable(text: $searchText, placement: .sidebar, prompt: Text("Search"))
-        .contextMenu {
-            Button(role: .destructive) {
-                isShowingDeleteAllChatsAlert = true
-            } label: {
-                Label("Delete All Chats", systemImage: "trash.slash")
+            .listStyle(.sidebar)
+            .searchable(text: $searchText, placement: .sidebar, prompt: Text("Search"))
+            .contextMenu {
+                Button(role: .destructive) {
+                    isShowingDeleteAllChatsAlert = true
+                } label: {
+                    Label("Delete All Chats", systemImage: "trash.slash")
+                }
             }
+
+            AppStatusBarView(
+                status: isAppBusy ? nil : statusUpdates.current,
+                fallbackText: statusMessage,
+                isBusy: isAppBusy,
+                busyText: appBusyText
+            )
         }
         .onChange(of: searchText) { _, newValue in
             // Debounce search input by 200ms
@@ -535,14 +532,12 @@ struct ContentView: View {
         VStack(spacing: 0) {
             detailContent
             chatComposerView
-            AppStatusBarView(
-                status: isAppBusy ? nil : statusUpdates.current,
-                fallbackText: statusMessage,
-                isBusy: isAppBusy,
-                busyText: appBusyText
-            )
         }
-        .background(theme.background)
+        .background(chatCanvasBackground)
+    }
+
+    private var chatCanvasBackground: some View {
+        theme.background
     }
 
     private var isAppBusy: Bool {
@@ -575,18 +570,72 @@ struct ContentView: View {
     private var emptyStateView: some View {
         VStack {
             Spacer()
-            VStack(spacing: 10) {
-                Image(systemName: "quote.bubble")
-                    .font(.system(size: 48, weight: .thin))
-                    .foregroundStyle(theme.textTertiary)
+            VStack(spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(
+                            RadialGradient(
+                                colors: [
+                                    Color.orange.opacity(0.45),
+                                    Color.yellow.opacity(0.15),
+                                    .clear,
+                                ],
+                                center: .center,
+                                startRadius: 2,
+                                endRadius: 34
+                            )
+                        )
+                        .frame(width: 72, height: 72)
+                    Image(systemName: "mug.fill")
+                        .font(.system(size: 27))
+                        .foregroundStyle(Color.white.opacity(0.9))
+                }
 
-                Text("Start a conversation")
-                    .font(.system(size: 16, weight: .semibold))
+                Text("Hello")
+                    .font(.system(size: 43, weight: .semibold, design: .rounded))
+                    .foregroundStyle(theme.textPrimary)
+
+                Text("How can I help you today?")
+                    .font(.system(size: 18))
                     .foregroundStyle(theme.textSecondary)
 
-                Text("Choose a chat in the sidebar or write a message below.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(theme.textTertiary)
+                Text("Default")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(theme.accent)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(theme.accent.opacity(0.12), in: Capsule())
+
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible(minimum: 160), spacing: 10),
+                        GridItem(.flexible(minimum: 160), spacing: 10),
+                    ],
+                    spacing: 10
+                ) {
+                    emptyStateQuickAction(
+                        title: "Explain a concept",
+                        icon: "lightbulb",
+                        prompt: "Explain this concept in simple terms:"
+                    )
+                    emptyStateQuickAction(
+                        title: "Summarize text",
+                        icon: "doc.text",
+                        prompt: "Summarize this text:"
+                    )
+                    emptyStateQuickAction(
+                        title: "Write code",
+                        icon: "chevron.left.forwardslash.chevron.right",
+                        prompt: "Help me write code for:"
+                    )
+                    emptyStateQuickAction(
+                        title: "Help me write",
+                        icon: "pencil.line",
+                        prompt: "Help me write:"
+                    )
+                }
+                .frame(maxWidth: 420)
+                .padding(.top, 4)
 
                 if isAppBusy, let busyText = appBusyText {
                     HStack(spacing: 8) {
@@ -612,6 +661,30 @@ struct ContentView: View {
             }
             Spacer()
         }
+    }
+
+    private func emptyStateQuickAction(title: String, icon: String, prompt: String) -> some View {
+        Button {
+            draft = prompt
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.textTertiary)
+                Text(title)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(theme.textSecondary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(theme.hoverBackground.opacity(0.55), in: RoundedRectangle(cornerRadius: 10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(theme.chipBorder.opacity(0.7), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private var messageListView: some View {
@@ -2403,7 +2476,7 @@ struct ContentView: View {
     // MARK: - Streaming Buffer Management
 
     /// Buffers a streaming delta and schedules a flush to batch UI updates.
-    /// This reduces per-token lag by updating state every 50ms instead of per token.
+    /// This reduces per-token lag by updating state at ~35fps instead of per token.
     private func bufferStreamDelta(_ delta: String, to messageID: UUID, in threadID: UUID) {
         // If buffer is for a different message/thread, flush immediately first
         if streamBufferMessageID != messageID || streamBufferThreadID != threadID {
@@ -2417,12 +2490,12 @@ struct ContentView: View {
         // Cancel existing flush timer
         streamFlushWorkItem?.cancel()
 
-        // Schedule flush in 50ms
+        // Schedule a short flush interval so streaming feels smooth without overwhelming SwiftUI.
         let workItem = DispatchWorkItem { [self] in
             flushStreamBuffer()
         }
         streamFlushWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: workItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + streamFlushInterval, execute: workItem)
     }
 
     /// Flushes the accumulated stream buffer to the message.
@@ -2435,7 +2508,9 @@ struct ContentView: View {
             return
         }
 
-        appendStreamDelta(streamBuffer, to: messageID, in: threadID)
+        withAnimation(.easeOut(duration: 0.08)) {
+            appendStreamDelta(streamBuffer, to: messageID, in: threadID)
+        }
         streamBuffer = ""
     }
 

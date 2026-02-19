@@ -30,6 +30,7 @@ struct ChatComposerView: View {
     let onShowUndo: () -> Void
 
     @Environment(\.appTheme) private var theme
+    @AppStorage("chat_font_size") private var chatFontSize = 13.0
     @FocusState private var isFocused: Bool
     @State private var isShowingDirectoryPicker = false
 
@@ -48,6 +49,38 @@ struct ChatComposerView: View {
             ?? "Select model"
     }
 
+    private var composerModeSelection: Binding<Int> {
+        Binding(
+            get: { agentEnabled ? 1 : 0 },
+            set: { newValue in
+                if newValue == 1 {
+                    if workingDirectory == nil {
+                        isShowingDirectoryPicker = true
+                        agentEnabled = false
+                    } else {
+                        agentEnabled = true
+                    }
+                } else {
+                    agentEnabled = false
+                }
+            }
+        )
+    }
+
+    private var composerFill: Color {
+        theme.composerBackground.opacity(0.78)
+    }
+
+    private var inputFontSize: CGFloat {
+        CGFloat(min(max(chatFontSize, 12), 20))
+    }
+
+    private var editorHeight: CGFloat {
+        let lineCount = max(1, draft.components(separatedBy: "\n").count)
+        let target = CGFloat(lineCount) * (inputFontSize + 7)
+        return min(112, max(28, target))
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Attachment chips
@@ -60,12 +93,11 @@ struct ChatComposerView: View {
                 // Text input
                 ZStack(alignment: .topLeading) {
                     TextEditor(text: $draft)
-                        .font(.system(size: 14))
+                        .font(.system(size: inputFontSize))
                         .foregroundStyle(theme.textPrimary)
                         .scrollContentBackground(.hidden)
                         .background(Color.clear)
-                        .frame(minHeight: 20, maxHeight: 120)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(height: editorHeight)
                         .focused($isFocused)
                         .onChange(of: draft) { _, newValue in
                             handleDraftChange(newValue)
@@ -75,7 +107,7 @@ struct ChatComposerView: View {
                         Text(
                             "Message (\u{21B5} to send) \u{2022} @ for files \u{2022} $ for skills"
                         )
-                        .font(.system(size: 14))
+                        .font(.system(size: inputFontSize))
                         .foregroundStyle(theme.textTertiary)
                         .allowsHitTesting(false)
                         .padding(.top, 0)
@@ -83,8 +115,8 @@ struct ChatComposerView: View {
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .padding(.bottom, 4)
+                .padding(.top, 7)
+                .padding(.bottom, 2)
                 .overlay(alignment: .bottomLeading) {
                     composerPopupOverlay
                         .padding(.leading, 4)
@@ -100,7 +132,7 @@ struct ChatComposerView: View {
                         } label: {
                             HStack(spacing: 4) {
                                 Text(selectedModelLabel)
-                                    .font(.system(size: 12, weight: .medium))
+                                    .font(.system(size: 12))
                                     .lineLimit(1)
                                     .truncationMode(.tail)
                                 Image(systemName: "chevron.down")
@@ -108,8 +140,9 @@ struct ChatComposerView: View {
                             }
                             .foregroundStyle(theme.textSecondary)
                             .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(theme.hoverBackground, in: Capsule())
+                            .padding(.vertical, 6)
+                            .background(theme.hoverBackground.opacity(0.65), in: Capsule())
+                            .overlay(Capsule().stroke(theme.chipBorder.opacity(0.75), lineWidth: 1))
                         }
                         .buttonStyle(.plain)
                         .popover(isPresented: $isShowingModelPicker, arrowEdge: .top) {
@@ -134,30 +167,21 @@ struct ChatComposerView: View {
                         }
                         .buttonStyle(.plain)
                         .help("Attach file (images, text, code)")
-
-                        // Agent mode toggle
-                        Button {
-                            if agentEnabled {
-                                agentEnabled = false
-                            } else {
-                                if workingDirectory == nil {
-                                    isShowingDirectoryPicker = true
-                                } else {
-                                    agentEnabled = true
-                                }
-                            }
-                        } label: {
-                            Image(systemName: "terminal")
-                                .font(.system(size: 15, weight: .regular))
-                                .foregroundStyle(agentEnabled ? theme.accent : theme.textSecondary)
-                                .frame(width: 20, height: 20)
-                        }
-                        .buttonStyle(.plain)
-                        .help(
-                            agentEnabled
-                                ? "Agent mode ON — click to disable"
-                                : "Enable agent mode (or type /agent <path>)")
                     }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(theme.hoverBackground.opacity(0.55), in: Capsule())
+                    .overlay(Capsule().stroke(theme.chipBorder.opacity(0.7), lineWidth: 1))
+
+                    Picker("Mode", selection: composerModeSelection) {
+                        Text("Chat").tag(0)
+                        Text("Agent").tag(1)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 122)
+                    .controlSize(.small)
+                    .labelsHidden()
+                    .help("Switch between Chat and Agent mode")
 
                     // Dangerous mode toggle (only shown when agent is enabled)
                     if agentEnabled {
@@ -211,8 +235,9 @@ struct ChatComposerView: View {
                             }
                             .foregroundStyle(theme.accent)
                             .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
+                            .padding(.vertical, 4)
                             .background(theme.accent.opacity(0.12), in: Capsule())
+                            .overlay(Capsule().stroke(theme.accent.opacity(0.3), lineWidth: 1))
                         }
                         .buttonStyle(.plain)
                         .help("Working directory — click to change")
@@ -234,17 +259,34 @@ struct ChatComposerView: View {
                         .buttonStyle(.plain)
                         .keyboardShortcut(.escape, modifiers: [])
                         .help("Stop generation (Esc)")
+                    } else {
+                        Button {
+                            onSend()
+                        } label: {
+                            Image(systemName: "arrow.up")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(canSend ? Color.white : theme.textTertiary)
+                                .frame(width: 24, height: 24)
+                                .background(
+                                    canSend ? theme.accent : theme.hoverBackground,
+                                    in: Circle()
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!canSend)
+                        .help("Send message (\u{21B5})")
                     }
+
                 }
                 .padding(.horizontal, 14)
-                .padding(.bottom, 8)
-                .padding(.top, 2)
+                .padding(.bottom, 7)
+                .padding(.top, 0)
             }
             .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.clear)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(composerFill)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
                             .stroke(
                                 isDraggingOver
                                     ? theme.accent
@@ -253,11 +295,12 @@ struct ChatComposerView: View {
                                 lineWidth: isDraggingOver ? 2 : 1)
                     )
             )
+            .shadow(color: .black.opacity(0.18), radius: 14, y: 6)
         }
         .frame(maxWidth: 920)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 20)
-        .padding(.bottom, 16)
+        .padding(.bottom, 14)
         .padding(.top, 8)
         .onReceive(NotificationCenter.default.publisher(for: .openModelPickerRequested)) { _ in
             isShowingModelPicker = true
@@ -386,12 +429,12 @@ struct ChatComposerView: View {
             }
         }
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(theme.composerBackground)
                 .shadow(color: .black.opacity(0.2), radius: 8, y: -2)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(theme.composerBorder, lineWidth: 1)
         )
         .frame(maxWidth: 360, alignment: .leading)
@@ -691,8 +734,8 @@ struct ChatComposerView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(theme.chipBackground, in: Capsule())
-        .overlay(Capsule().stroke(theme.chipBorder, lineWidth: 1))
+        .background(theme.chipBackground.opacity(0.8), in: Capsule())
+        .overlay(Capsule().stroke(theme.chipBorder.opacity(0.75), lineWidth: 1))
     }
 
     // MARK: - File handling

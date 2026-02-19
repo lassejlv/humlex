@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import SwiftUI
 
 enum SettingsTab: String, CaseIterable, Identifiable {
@@ -71,6 +72,7 @@ struct SettingsView: View {
     @AppStorage("debug_mode_enabled") private var isDebugModeEnabled = false
     @AppStorage("model_picker_in_toolbar_enabled") private var isModelPickerInToolbarEnabled = false
     @AppStorage("default_system_instructions") private var defaultSystemInstructions: String = ""
+    @AppStorage("chat_font_size") private var chatFontSize = 13.0
 
     // MCP add server form
     @State private var showAddServerForm = false
@@ -155,48 +157,39 @@ struct SettingsView: View {
     }
 
     private var settingsWindowTop: Color {
-        if colorScheme == .dark { return Color(red: 0.10, green: 0.10, blue: 0.11) }
-        return theme.sidebarBackground.opacity(0.92)
+        Color(nsColor: .windowBackgroundColor)
     }
 
     private var settingsWindowBottom: Color {
-        if colorScheme == .dark { return Color(red: 0.08, green: 0.08, blue: 0.09) }
-        return theme.background
+        Color(nsColor: .windowBackgroundColor)
     }
 
     private var settingsChromeBackground: Color {
-        if colorScheme == .dark { return Color(red: 0.09, green: 0.09, blue: 0.10) }
-        return theme.background.opacity(0.9)
+        Color(nsColor: .controlBackgroundColor)
     }
 
     private var settingsSidebarColor: Color {
-        if colorScheme == .dark { return Color(red: 0.11, green: 0.11, blue: 0.12) }
-        return theme.sidebarBackground.opacity(0.75)
+        Color(nsColor: .underPageBackgroundColor)
     }
 
     private var settingsCardBackground: Color {
-        if colorScheme == .dark { return Color(red: 0.13, green: 0.13, blue: 0.14) }
-        return theme.surfaceBackground.opacity(0.88)
+        Color(nsColor: .textBackgroundColor).opacity(colorScheme == .dark ? 0.8 : 1.0)
     }
 
     private var settingsControlBackground: Color {
-        if colorScheme == .dark { return Color(red: 0.16, green: 0.16, blue: 0.17) }
-        return theme.surfaceBackground
+        Color(nsColor: .controlBackgroundColor)
     }
 
     private var settingsSelectionBackground: Color {
-        if colorScheme == .dark { return Color(red: 0.18, green: 0.18, blue: 0.20) }
-        return theme.selectionBackground
+        theme.accent.opacity(colorScheme == .dark ? 0.2 : 0.12)
     }
 
     private var settingsBorderColor: Color {
-        if colorScheme == .dark { return Color.white.opacity(0.10) }
-        return theme.chipBorder
+        Color(nsColor: .separatorColor).opacity(0.9)
     }
 
     private var settingsHoverBackground: Color {
-        if colorScheme == .dark { return Color(red: 0.22, green: 0.22, blue: 0.23) }
-        return theme.hoverBackground
+        Color(nsColor: .selectedContentBackgroundColor).opacity(0.2)
     }
 
     var body: some View {
@@ -217,19 +210,12 @@ struct SettingsView: View {
             }
         }
         .frame(width: 980, height: 700)
-        .background(
-            LinearGradient(
-                colors: [settingsWindowTop, settingsWindowBottom],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(settingsWindowTop)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(settingsBorderColor, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(settingsBorderColor.opacity(0.8), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.2), radius: 22, y: 12)
         .alert("Delete All Chats", isPresented: $isShowingDeleteAllChatsAlert) {
             Button("Cancel", role: .cancel) {}
             Button("Delete All", role: .destructive) {
@@ -244,13 +230,9 @@ struct SettingsView: View {
         HStack(spacing: 12) {
             HStack(spacing: 10) {
                 Image(systemName: activeSectionIcon)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(theme.accent)
-                    .frame(width: 28, height: 28)
-                    .background(
-                        settingsControlBackground,
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    )
+                    .frame(width: 18)
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(activeSectionTitle)
@@ -273,17 +255,16 @@ struct SettingsView: View {
                 onClose()
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(theme.textSecondary)
-                    .frame(width: 24, height: 24)
-                    .background(settingsHoverBackground, in: Circle())
+                    .frame(width: 22, height: 22)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
             .help("Close")
         }
         .padding(.horizontal, 22)
-        .padding(.vertical, 14)
-        .background(settingsChromeBackground.opacity(0.95))
+        .padding(.vertical, 12)
+        .background(settingsChromeBackground)
     }
 
     @ViewBuilder
@@ -326,51 +307,9 @@ struct SettingsView: View {
 
         return ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(Color.red.opacity(0.85))
-                        .frame(width: 11, height: 11)
-                    Circle()
-                        .fill(Color.yellow.opacity(0.85))
-                        .frame(width: 11, height: 11)
-                    Circle()
-                        .fill(Color.green.opacity(0.85))
-                        .frame(width: 11, height: 11)
-                }
-                .padding(.horizontal, 8)
-                .padding(.top, 4)
-
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(theme.textTertiary)
-
-                    TextField("Search settings", text: $settingsSearchText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 13))
-                        .foregroundStyle(theme.textPrimary)
-
-                    if !settingsSearchText.isEmpty {
-                        Button {
-                            settingsSearchText = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 12))
-                                .foregroundStyle(theme.textTertiary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(
-                    settingsControlBackground.opacity(0.95),
-                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(settingsBorderColor, lineWidth: 1)
-                )
+                TextField("Search settings", text: $settingsSearchText)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 13))
 
                 if !filteredGeneralTabs.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
@@ -409,7 +348,7 @@ struct SettingsView: View {
                 if isSearchingSettings && !hasAnySidebarResult {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("No matches")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(theme.textSecondary)
                         Text("Try a provider or section name.")
                             .font(.system(size: 12))
@@ -421,16 +360,14 @@ struct SettingsView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 14)
         }
-        .frame(width: 285)
+        .frame(width: 270)
         .background(settingsSidebarColor)
     }
 
     private func sidebarSectionTitle(_ title: String) -> some View {
         Text(title)
-            .font(.system(size: 12, weight: .semibold))
+            .font(.system(size: 11))
             .foregroundStyle(theme.textTertiary)
-            .textCase(.uppercase)
-            .tracking(0.5)
             .padding(.horizontal, 8)
             .padding(.bottom, 2)
     }
@@ -445,17 +382,12 @@ struct SettingsView: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: tab.icon)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(isSelected ? theme.accent : theme.textSecondary)
-                    .frame(width: 24, height: 24)
-                    .background(
-                        (isSelected
-                            ? settingsSelectionBackground : settingsControlBackground.opacity(0.8)),
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    )
+                    .frame(width: 18)
 
                 Text(tab.rawValue)
-                    .font(.system(size: 14, weight: isSelected ? .semibold : .regular))
+                    .font(.system(size: 14))
                     .foregroundStyle(isSelected ? theme.textPrimary : theme.textSecondary)
 
                 Spacer()
@@ -463,7 +395,7 @@ struct SettingsView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 7)
             .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(isSelected ? settingsSelectionBackground : Color.clear)
             )
         }
@@ -484,15 +416,10 @@ struct SettingsView: View {
             HStack(spacing: 10) {
                 ProviderIcon(slug: provider.iconSlug, size: 16)
                     .foregroundColor(isSelected ? theme.accent : theme.textSecondary)
-                    .frame(width: 24, height: 24)
-                    .background(
-                        (isSelected
-                            ? settingsSelectionBackground : settingsControlBackground.opacity(0.8)),
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    )
+                    .frame(width: 18)
 
                 Text(provider.rawValue)
-                    .font(.system(size: 14, weight: isSelected ? .semibold : .regular))
+                    .font(.system(size: 14))
                     .foregroundStyle(
                         tab == .experimental && !isEnabled
                             ? theme.textTertiary
@@ -514,7 +441,7 @@ struct SettingsView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 7)
             .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(isSelected ? settingsSelectionBackground : Color.clear)
             )
         }
@@ -1100,7 +1027,7 @@ struct SettingsView: View {
                 Image(systemName: "pause.circle")
                     .font(.system(size: 11))
                 Text("Disabled")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 11))
             }
             .foregroundStyle(theme.textSecondary)
             .padding(.horizontal, 8)
@@ -1111,7 +1038,7 @@ struct SettingsView: View {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 11))
                 Text("\(count) models")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 11))
             }
             .foregroundColor(.green)
             .padding(.horizontal, 8)
@@ -1122,7 +1049,7 @@ struct SettingsView: View {
                 Image(systemName: "circle.dotted")
                     .font(.system(size: 11))
                 Text("Not loaded")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 11))
             }
             .foregroundStyle(theme.textSecondary)
             .padding(.horizontal, 8)
@@ -1133,7 +1060,7 @@ struct SettingsView: View {
                 Image(systemName: "circle")
                     .font(.system(size: 11))
                 Text("No key")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 11))
             }
             .foregroundStyle(theme.textSecondary)
             .padding(.horizontal, 8)
@@ -1172,7 +1099,7 @@ struct SettingsView: View {
                     Image(systemName: "doc.text")
                         .font(.system(size: 11))
                     Text("\(discoveredSkills.count)")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 11))
                 }
                 .foregroundStyle(discoveredSkills.isEmpty ? theme.textSecondary : .green)
                 .padding(.horizontal, 8)
@@ -1268,7 +1195,7 @@ struct SettingsView: View {
                                                     URL(fileURLWithPath: skill.sourcePath))
                                             } label: {
                                                 Text("Open")
-                                                    .font(.system(size: 11, weight: .medium))
+                                                    .font(.system(size: 11))
                                             }
                                             .buttonStyle(.bordered)
                                             .controlSize(.mini)
@@ -1408,7 +1335,7 @@ struct SettingsView: View {
             Image(systemName: count > 0 ? "wrench.and.screwdriver.fill" : "wrench.and.screwdriver")
                 .font(.system(size: 11))
             Text("\(count) tool\(count == 1 ? "" : "s")")
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 11))
         }
         .foregroundColor(count > 0 ? .green : theme.textSecondary)
         .padding(.horizontal, 8)
@@ -1481,7 +1408,7 @@ struct SettingsView: View {
     {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 11))
                 .foregroundStyle(theme.textSecondary)
 
             TextField(placeholder, text: text)
@@ -1684,7 +1611,7 @@ struct SettingsView: View {
             if !serverTools.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Tools (\(serverTools.count))")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 11))
                         .foregroundStyle(theme.textSecondary)
 
                     LazyVGrid(
@@ -1906,7 +1833,7 @@ struct SettingsView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity)
-        .background(theme.background)
+        .background(settingsChromeBackground)
     }
 
     // MARK: - General Detail
@@ -1915,6 +1842,32 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
+                    settingsGroup("Appearance") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Text("Chat font size")
+                                    .font(.system(size: 15, weight: .medium))
+                                    .foregroundStyle(theme.textPrimary)
+                                Spacer()
+                                Text("\(Int(chatFontSize.rounded())) pt")
+                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(theme.textSecondary)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(settingsControlBackground, in: Capsule())
+                            }
+
+                            Slider(value: $chatFontSize, in: 11...20, step: 1)
+                                .tint(theme.accent)
+
+                            Text("Preview: The quick brown fox jumps over the lazy dog.")
+                                .font(.system(size: chatFontSize))
+                                .foregroundStyle(theme.textSecondary)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                    }
+
                     settingsGroup("Behavior") {
                         settingsToggleRow(
                             title: "Auto-scroll",
@@ -2033,7 +1986,7 @@ struct SettingsView: View {
     {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(theme.textTertiary)
                 .padding(.horizontal, 4)
 
@@ -2042,11 +1995,11 @@ struct SettingsView: View {
             }
             .background(
                 settingsCardBackground,
-                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(settingsBorderColor.opacity(0.95), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(settingsBorderColor.opacity(0.75), lineWidth: 1)
             )
         }
     }
@@ -2061,7 +2014,7 @@ struct SettingsView: View {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.system(size: 16))
                         .foregroundStyle(theme.textPrimary)
                     if let subtitle {
                         Text(subtitle)

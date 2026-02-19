@@ -10,6 +10,7 @@ struct MessageRow: View {
 
     @Environment(\.appTheme) private var theme
     @Environment(\.toastManager) private var toast
+    @AppStorage("chat_font_size") private var chatFontSize = 13.0
     @State private var showActions = false
     @State private var hideTask: DispatchWorkItem?
     @State private var toolResultExpanded = false
@@ -48,6 +49,10 @@ struct MessageRow: View {
         message.role == .user
     }
 
+    private var resolvedChatFontSize: CGFloat {
+        CGFloat(min(max(chatFontSize, 11), 20))
+    }
+
     var body: some View {
         HStack {
             if isUser {
@@ -75,6 +80,7 @@ struct MessageRow: View {
 
             if !message.text.isEmpty {
                 Text(message.text)
+                    .font(.system(size: resolvedChatFontSize))
                     .foregroundStyle(theme.userBubbleText)
                     .textSelection(.enabled)
                     .padding(.horizontal, 14)
@@ -92,7 +98,6 @@ struct MessageRow: View {
                 ThinkingIndicatorView(
                     label: isAgentMode ? "Agent is working" : "Thinking"
                 )
-                .frame(maxWidth: 760, alignment: .leading)
             } else {
                 if !message.text.isEmpty {
                     MarkdownView(source: message.text, isStreaming: isStreaming)
@@ -592,49 +597,50 @@ extension MessageRow: Equatable {
 
 struct ThinkingIndicatorView: View {
     @Environment(\.appTheme) private var theme
-    @State private var isAnimating = false
+    @State private var shimmerOffset: CGFloat = -120
     let label: String
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 2) {
             ProgressView()
                 .controlSize(.small)
                 .tint(theme.accent)
 
-            Text(label)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(theme.textSecondary)
+            ZStack {
+                Text(label)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(theme.textSecondary)
 
-            HStack(spacing: 4) {
-                ForEach(0..<3, id: \.self) { idx in
-                    Circle()
-                        .fill(theme.textTertiary.opacity(0.65))
-                        .frame(width: 4.5, height: 4.5)
-                        .scaleEffect(isAnimating ? 1.0 : 0.72)
-                        .opacity(isAnimating ? 1.0 : 0.45)
-                        .animation(
-                            .easeInOut(duration: 0.55)
-                                .repeatForever(autoreverses: true)
-                                .delay(Double(idx) * 0.12),
-                            value: isAnimating
-                        )
+                LinearGradient(
+                    colors: [
+                        .clear,
+                        Color.white.opacity(0.9),
+                        Color.white.opacity(0.45),
+                        .clear,
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(width: 80)
+                .offset(x: shimmerOffset)
+                .mask(
+                    Text(label)
+                        .font(.system(size: 13, weight: .medium))
+                )
+                .allowsHitTesting(false)
+            }
+            .onAppear {
+                shimmerOffset = -120
+                withAnimation(.linear(duration: 1.35).repeatForever(autoreverses: false)) {
+                    shimmerOffset = 120
                 }
             }
-
-            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.horizontal, 2)
+        .padding(.vertical, 7)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(theme.codeBackground.opacity(0.45))
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(theme.codeBorder.opacity(0.7), lineWidth: 1)
-        )
-        .onAppear {
-            isAnimating = true
-        }
     }
 }
