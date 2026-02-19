@@ -1,3 +1,5 @@
+import Foundation
+import AppKit
 import SwiftUI
 
 // MARK: - Theme Definition
@@ -388,6 +390,182 @@ extension AppTheme {
     ]
 }
 
+// MARK: - Theme Import Models
+
+private enum ThemeImportError: LocalizedError {
+    case invalidFormat
+    case emptyImport
+    case duplicateBuiltInThemeID(String)
+    case missingColorKey(themeName: String, key: String)
+    case invalidColor(themeName: String, key: String, value: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidFormat:
+            return
+                "Invalid theme JSON format. Use a single theme object, an array, or {\"themes\": [...]}."
+        case .emptyImport:
+            return "No themes found in the selected JSON file."
+        case .duplicateBuiltInThemeID(let id):
+            return "Theme id '\(id)' conflicts with a built-in theme id."
+        case .missingColorKey(let themeName, let key):
+            return "Theme '\(themeName)' is missing required color key '\(key)'."
+        case .invalidColor(let themeName, let key, let value):
+            return "Theme '\(themeName)' has invalid color for '\(key)': '\(value)'."
+        }
+    }
+}
+
+private struct ImportedThemeFile: Decodable {
+    let themes: [ImportedThemeDefinition]
+
+    private struct WrappedThemes: Decodable {
+        let themes: [ImportedThemeDefinition]
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+
+        if let wrapped = try? container.decode(WrappedThemes.self) {
+            self.themes = wrapped.themes
+            return
+        }
+
+        if let many = try? container.decode([ImportedThemeDefinition].self) {
+            self.themes = many
+            return
+        }
+
+        let single = try container.decode(ImportedThemeDefinition.self)
+        self.themes = [single]
+    }
+}
+
+private struct ImportedThemeDefinition: Codable, Hashable {
+    let id: String?
+    let name: String
+    let prefersDarkAppearance: Bool?
+    let colors: [String: String]
+
+    var resolvedID: String {
+        let candidate = id?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !candidate.isEmpty { return candidate }
+        return "imported-\(name.themeSlug)"
+    }
+
+    func toAppTheme() throws -> AppTheme {
+        AppTheme(
+            id: resolvedID,
+            name: name,
+            isCustom: true,
+            prefersDarkAppearance: prefersDarkAppearance ?? true,
+            background: try resolveColor(for: "background"),
+            sidebarBackground: try resolveColor(for: "sidebarBackground"),
+            surfaceBackground: try resolveColor(for: "surfaceBackground"),
+            divider: try resolveColor(for: "divider"),
+            textPrimary: try resolveColor(for: "textPrimary"),
+            textSecondary: try resolveColor(for: "textSecondary"),
+            textTertiary: try resolveColor(for: "textTertiary"),
+            accent: try resolveColor(for: "accent"),
+            selectionBackground: try resolveColor(for: "selectionBackground"),
+            hoverBackground: try resolveColor(for: "hoverBackground"),
+            userBubble: try resolveColor(for: "userBubble"),
+            userBubbleText: try resolveColor(for: "userBubbleText"),
+            assistantBackground: try resolveColor(for: "assistantBackground"),
+            composerBackground: try resolveColor(for: "composerBackground"),
+            composerBorder: try resolveColor(for: "composerBorder"),
+            composerBorderFocused: try resolveColor(for: "composerBorderFocused"),
+            codeBackground: try resolveColor(for: "codeBackground"),
+            codeBorder: try resolveColor(for: "codeBorder"),
+            codeHeaderBackground: try resolveColor(for: "codeHeaderBackground"),
+            syntaxKeyword: try resolveColor(for: "syntaxKeyword"),
+            syntaxString: try resolveColor(for: "syntaxString"),
+            syntaxComment: try resolveColor(for: "syntaxComment"),
+            syntaxNumber: try resolveColor(for: "syntaxNumber"),
+            syntaxType: try resolveColor(for: "syntaxType"),
+            syntaxFunction: try resolveColor(for: "syntaxFunction"),
+            syntaxPunctuation: try resolveColor(for: "syntaxPunctuation"),
+            syntaxPlain: try resolveColor(for: "syntaxPlain"),
+            chipBackground: try resolveColor(for: "chipBackground"),
+            chipBorder: try resolveColor(for: "chipBorder")
+        )
+    }
+
+    private func resolveColor(for key: String) throws -> Color {
+        guard let value = colors[key] else {
+            throw ThemeImportError.missingColorKey(themeName: name, key: key)
+        }
+        guard let color = Color.fromHex(value) else {
+            throw ThemeImportError.invalidColor(themeName: name, key: key, value: value)
+        }
+        return color
+    }
+}
+
+private extension String {
+    var themeSlug: String {
+        let lowered = self.lowercased()
+        let replaced = lowered.replacingOccurrences(
+            of: "[^a-z0-9]+",
+            with: "-",
+            options: .regularExpression
+        )
+        let trimmed = replaced.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return trimmed.isEmpty ? "theme" : trimmed
+    }
+}
+
+private extension Color {
+    static func fromHex(_ value: String) -> Color? {
+        var hex = value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        if hex.hasPrefix("#") {
+            hex.removeFirst()
+        } else if hex.hasPrefix("0X") {
+            hex = String(hex.dropFirst(2))
+        }
+
+        let expanded: String
+        switch hex.count {
+        case 3:
+            expanded = hex.map { "\($0)\($0)" }.joined()
+        case 4:
+            expanded = hex.map { "\($0)\($0)" }.joined()
+        case 6, 8:
+            expanded = hex
+        default:
+            return nil
+        }
+
+        guard let raw = UInt64(expanded, radix: 16) else { return nil }
+
+        let red: Double
+        let green: Double
+        let blue: Double
+        let alpha: Double
+
+        if expanded.count == 8 {
+            red = Double((raw & 0xFF00_0000) >> 24) / 255.0
+            green = Double((raw & 0x00FF_0000) >> 16) / 255.0
+            blue = Double((raw & 0x0000_FF00) >> 8) / 255.0
+            alpha = Double(raw & 0x0000_00FF) / 255.0
+        } else {
+            red = Double((raw & 0xFF00_00) >> 16) / 255.0
+            green = Double((raw & 0x00FF_00) >> 8) / 255.0
+            blue = Double(raw & 0x0000_FF) / 255.0
+            alpha = 1.0
+        }
+
+        return Color(
+            nsColor: NSColor(
+                srgbRed: CGFloat(red),
+                green: CGFloat(green),
+                blue: CGFloat(blue),
+                alpha: CGFloat(alpha)
+            )
+        )
+    }
+}
+
 // MARK: - Theme Manager (observable)
 
 @MainActor
@@ -395,16 +573,79 @@ final class ThemeManager: ObservableObject {
     static let shared = ThemeManager()
 
     @AppStorage("selected_theme_id") private var selectedThemeID: String = "system"
+    @AppStorage("imported_themes_json") private var importedThemesJSON: String = "[]"
 
+    @Published private(set) var themes: [AppTheme] = AppTheme.allThemes
     @Published var current: AppTheme = .system
+    private var importedThemeDefinitions: [ImportedThemeDefinition] = []
 
     private init() {
-        current = AppTheme.allThemes.first(where: { $0.id == selectedThemeID }) ?? .system
+        importedThemeDefinitions = Self.decodeImportedThemes(from: importedThemesJSON)
+        refreshThemes()
+        current = themes.first(where: { $0.id == selectedThemeID }) ?? .system
+        selectedThemeID = current.id
     }
 
     func select(_ theme: AppTheme) {
-        selectedThemeID = theme.id
-        current = theme
+        guard let resolvedTheme = themes.first(where: { $0.id == theme.id }) else { return }
+        selectedThemeID = resolvedTheme.id
+        current = resolvedTheme
+    }
+
+    func importThemes(from fileURL: URL) throws -> Int {
+        let data = try Data(contentsOf: fileURL)
+        let parsedThemes = try Self.decodeThemeFile(data)
+        guard !parsedThemes.isEmpty else { throw ThemeImportError.emptyImport }
+
+        var mergedByID = Dictionary(
+            uniqueKeysWithValues: importedThemeDefinitions.map { ($0.resolvedID, $0) }
+        )
+
+        for definition in parsedThemes {
+            let resolvedID = definition.resolvedID
+            if AppTheme.allThemes.contains(where: { $0.id == resolvedID }) {
+                throw ThemeImportError.duplicateBuiltInThemeID(resolvedID)
+            }
+            _ = try definition.toAppTheme()
+            mergedByID[resolvedID] = definition
+        }
+
+        importedThemeDefinitions = mergedByID.values.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+        persistImportedThemes()
+        refreshThemes()
+        current = themes.first(where: { $0.id == selectedThemeID }) ?? .system
+        selectedThemeID = current.id
+        return parsedThemes.count
+    }
+
+    private func refreshThemes() {
+        let imported = importedThemeDefinitions.compactMap { try? $0.toAppTheme() }
+        themes = AppTheme.allThemes + imported
+    }
+
+    private func persistImportedThemes() {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard
+            let data = try? encoder.encode(importedThemeDefinitions),
+            let json = String(data: data, encoding: .utf8)
+        else { return }
+        importedThemesJSON = json
+    }
+
+    private static func decodeThemeFile(_ data: Data) throws -> [ImportedThemeDefinition] {
+        let decoder = JSONDecoder()
+        guard let file = try? decoder.decode(ImportedThemeFile.self, from: data) else {
+            throw ThemeImportError.invalidFormat
+        }
+        return file.themes
+    }
+
+    private static func decodeImportedThemes(from rawJSON: String) -> [ImportedThemeDefinition] {
+        guard let data = rawJSON.data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([ImportedThemeDefinition].self, from: data)) ?? []
     }
 }
 
