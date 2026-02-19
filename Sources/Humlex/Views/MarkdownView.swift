@@ -9,15 +9,25 @@ struct MarkdownView: View {
     let isStreaming: Bool
 
     @Environment(\.appTheme) private var theme
+    @AppStorage("chat_font_size") private var chatFontSize = 13.0
 
     /// Cached parsed blocks to avoid re-parsing on every view update
     @State private var cachedBlocks: [Block] = []
     /// Tracks the last source that was parsed (for cache invalidation)
     @State private var lastParsedSource: String = ""
+    @State private var isCursorVisible = true
+    @State private var streamFadeOpacity: Double = 1.0
+
+    private let cursorBlinkTimer = Timer.publish(every: 0.52, on: .main, in: .common)
+        .autoconnect()
 
     init(source: String, isStreaming: Bool = false) {
         self.source = source
         self.isStreaming = isStreaming
+    }
+
+    private var bodyFontSize: CGFloat {
+        CGFloat(min(max(chatFontSize, 11), 20))
     }
 
     var body: some View {
@@ -26,6 +36,7 @@ struct MarkdownView: View {
                 renderBlock(block, isLast: idx == cachedBlocks.count - 1)
             }
         }
+        .opacity(streamFadeOpacity)
         .onAppear {
             // Initial parse when view appears
             if cachedBlocks.isEmpty || lastParsedSource != source {
@@ -38,7 +49,28 @@ struct MarkdownView: View {
             if lastParsedSource != newValue {
                 cachedBlocks = parseBlocks(newValue)
                 lastParsedSource = newValue
+                animateStreamingFade()
             }
+        }
+        .onChange(of: isStreaming) { _, newValue in
+            isCursorVisible = newValue
+        }
+        .onReceive(cursorBlinkTimer) { _ in
+            guard isStreaming else { return }
+            withAnimation(.easeInOut(duration: 0.16)) {
+                isCursorVisible.toggle()
+            }
+        }
+    }
+
+    private func animateStreamingFade() {
+        guard isStreaming else {
+            streamFadeOpacity = 1.0
+            return
+        }
+        streamFadeOpacity = 0.84
+        withAnimation(.easeOut(duration: 0.22)) {
+            streamFadeOpacity = 1.0
         }
     }
 
@@ -301,7 +333,9 @@ struct MarkdownView: View {
         case .codeBlock(let language, let code, let closed):
             CodeBlockView(
                 language: language, code: code, closed: closed,
-                showCursor: isStreaming && isLast && !closed)
+                showCursor: isStreaming && isLast && !closed,
+                cursorVisible: isCursorVisible
+            )
 
         case .table(let headers, let rows):
             tableView(headers: headers, rows: rows)
@@ -332,7 +366,10 @@ struct MarkdownView: View {
             .padding(.leading, 4)
 
         case .paragraph(let text):
-            let displayText = isStreaming && isLast ? text + " \u{258D}" : text
+            let displayText =
+                isStreaming && isLast
+                ? (text + (isCursorVisible ? " \u{258D}" : " "))
+                : text
             inlineMarkdown(displayText)
 
         case .horizontalRule:
@@ -370,7 +407,11 @@ struct MarkdownView: View {
     @ViewBuilder
     private func tableCell(_ text: String, isHeader: Bool) -> some View {
         inlineMarkdown(text.isEmpty ? " " : text)
-            .font(isHeader ? .system(size: 13, weight: .semibold) : .system(size: 13))
+            .font(
+                isHeader
+                    ? .system(size: bodyFontSize, weight: .semibold)
+                    : .system(size: bodyFontSize)
+            )
             .frame(minWidth: 120, maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
@@ -393,10 +434,10 @@ struct MarkdownView: View {
     private func renderHeading(level: Int, text: String) -> some View {
         let font: Font =
             switch level {
-            case 1: .title.bold()
-            case 2: .title2.bold()
-            case 3: .title3.bold()
-            default: .headline
+            case 1: .system(size: bodyFontSize + 10, weight: .bold)
+            case 2: .system(size: bodyFontSize + 7, weight: .bold)
+            case 3: .system(size: bodyFontSize + 4, weight: .bold)
+            default: .system(size: bodyFontSize + 2, weight: .semibold)
             }
         inlineMarkdown(text)
             .font(font)
@@ -412,10 +453,12 @@ struct MarkdownView: View {
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) {
             Text(attributed)
+                .font(.system(size: bodyFontSize))
                 .foregroundStyle(theme.textPrimary)
                 .tint(theme.accent)
         } else {
             Text(source)
+                .font(.system(size: bodyFontSize))
                 .foregroundStyle(theme.textPrimary)
         }
     }
@@ -428,6 +471,7 @@ struct CodeBlockView: View {
     let code: String
     let closed: Bool
     let showCursor: Bool
+    let cursorVisible: Bool
 
     @Environment(\.appTheme) private var theme
     @Environment(\.toastManager) private var toast
@@ -509,7 +553,7 @@ struct CodeBlockView: View {
 
     private var codeContent: some View {
         let display: AttributedString
-        if showCursor {
+        if showCursor && cursorVisible {
             var cursor = AttributedString(" \u{258D}")
             cursor.foregroundColor = .secondary
             cursor.font = .system(.callout, design: .monospaced)
