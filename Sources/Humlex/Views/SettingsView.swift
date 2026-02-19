@@ -161,27 +161,27 @@ struct SettingsView: View {
     }
 
     private var settingsWindowTop: Color {
-        Color(nsColor: .windowBackgroundColor)
+        theme.background
     }
 
     private var settingsWindowBottom: Color {
-        Color(nsColor: .windowBackgroundColor)
+        theme.background
     }
 
     private var settingsChromeBackground: Color {
-        Color(nsColor: .controlBackgroundColor)
+        theme.surfaceBackground
     }
 
     private var settingsSidebarColor: Color {
-        Color(nsColor: .underPageBackgroundColor)
+        theme.sidebarBackground
     }
 
     private var settingsCardBackground: Color {
-        Color(nsColor: .textBackgroundColor).opacity(colorScheme == .dark ? 0.8 : 1.0)
+        theme.surfaceBackground.opacity(colorScheme == .dark ? 0.9 : 0.98)
     }
 
     private var settingsControlBackground: Color {
-        Color(nsColor: .controlBackgroundColor)
+        theme.background.opacity(colorScheme == .dark ? 0.35 : 0.55)
     }
 
     private var settingsSelectionBackground: Color {
@@ -189,11 +189,11 @@ struct SettingsView: View {
     }
 
     private var settingsBorderColor: Color {
-        Color(nsColor: .separatorColor).opacity(0.9)
+        theme.divider.opacity(0.9)
     }
 
     private var settingsHoverBackground: Color {
-        Color(nsColor: .selectedContentBackgroundColor).opacity(0.2)
+        theme.hoverBackground
     }
 
     var body: some View {

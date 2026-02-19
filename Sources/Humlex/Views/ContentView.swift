@@ -451,7 +451,9 @@ struct ContentView: View {
         } detail: {
             detailView
                 .frame(minWidth: 400)
+                .background(theme.background)
         }
+        .background(theme.background)
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
                 Button {
@@ -474,6 +476,7 @@ struct ContentView: View {
                 .help("Settings")
             }
         }
+        .tint(theme.accent)
     }
 
     private var sidebarView: some View {
@@ -503,6 +506,8 @@ struct ContentView: View {
                 }
             }
             .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .background(theme.sidebarBackground)
             .searchable(text: $searchText, placement: .sidebar, prompt: Text("Search"))
             .contextMenu {
                 Button(role: .destructive) {
@@ -519,6 +524,7 @@ struct ContentView: View {
                 busyText: appBusyText
             )
         }
+        .background(theme.sidebarBackground)
         .onChange(of: searchText) { _, newValue in
             // Debounce search input by 200ms
             searchDebounceWorkItem?.cancel()
