@@ -222,9 +222,10 @@ struct MessageRow: View {
         .frame(maxWidth: 760, alignment: .leading)
     }
 
-    /// Check if a server name belongs to a CLI provider (tools are informational only).
+    /// Legacy hook for informational tool events. Currently unused.
     private static func isCLIProviderTool(serverName: String) -> Bool {
-        serverName == "Codex" || serverName == "Claude Code"
+        _ = serverName
+        return false
     }
 
     private func toolCallIcon(_ name: String) -> String {

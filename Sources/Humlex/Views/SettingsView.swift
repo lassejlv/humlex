@@ -7,7 +7,6 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case general = "General"
     case skills = "Skills"
     case providers = "Providers"
-    case experimental = "Experimental"
     case mcp = "MCP Servers"
     case theme = "Theme"
     case systemInstructions = "System Instructions"
@@ -19,7 +18,6 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: return "gearshape"
         case .skills: return "sparkles"
         case .providers: return "bolt.horizontal"
-        case .experimental: return "flask"
         case .mcp: return "server.rack"
         case .theme: return "paintbrush"
         case .systemInstructions: return "text.bubble"
@@ -58,14 +56,7 @@ struct SettingsView: View {
 
     @State private var selectedTab: SettingsTab = .general
     @State private var selectedProvider: AIProvider = .openAI
-    @State private var claudeCodeAvailability: ClaudeCodeAvailability?
-    @State private var codexAvailability: CodexAvailability?
-    @State private var isLoggingIntoCodex = false
-    @AppStorage("experimental_claude_code_enabled") private var isClaudeCodeEnabled = false
-    @AppStorage("experimental_codex_enabled") private var isCodexEnabled = false
     @AppStorage("provider_ollama_enabled") private var isOllamaEnabled = true
-    @AppStorage("codex_sandbox_mode") private var codexSandboxModeRaw: String = CodexSandboxMode
-        .readOnly.rawValue
     @AppStorage("auto_scroll_enabled") private var isAutoScrollEnabled = true
     @AppStorage("performance_mode_enabled") private var isPerformanceModeEnabled = true
     @AppStorage("performance_visible_message_limit") private var performanceVisibleMessageLimit =
@@ -94,8 +85,6 @@ struct SettingsView: View {
         switch selectedTab {
         case .providers:
             return "Providers"
-        case .experimental:
-            return "Experimental"
         case .mcp:
             return "MCP Servers"
         case .general:
@@ -113,8 +102,6 @@ struct SettingsView: View {
         switch selectedTab {
         case .providers:
             return "Manage API keys and model access"
-        case .experimental:
-            return "Preview and control experimental providers"
         case .mcp:
             return "Configure Model Context Protocol servers"
         case .general:
@@ -132,8 +119,6 @@ struct SettingsView: View {
         switch selectedTab {
         case .providers:
             return "bolt.horizontal"
-        case .experimental:
-            return "flask"
         case .mcp:
             return "server.rack"
         case .general:
@@ -251,7 +236,7 @@ struct SettingsView: View {
 
             Spacer()
 
-            if selectedTab == .providers || selectedTab == .experimental {
+            if selectedTab == .providers {
                 statusBadge
             }
 
@@ -280,8 +265,6 @@ struct SettingsView: View {
             skillsDetail
         case .providers:
             providerOverviewDetail
-        case .experimental:
-            providerOverviewDetail
         case .mcp:
             mcpDetail
         case .theme:
@@ -295,7 +278,7 @@ struct SettingsView: View {
 
     private var settingsSidebar: some View {
         let generalTabs: [SettingsTab] = [.general, .skills, .theme, .systemInstructions]
-        let aiTabs: [SettingsTab] = [.providers, .experimental]
+        let aiTabs: [SettingsTab] = [.providers]
         let filteredGeneralTabs = generalTabs.filter { matchesSettingsSearch($0.rawValue) }
         let filteredAITabs = aiTabs.filter { matchesSettingsSearch($0.rawValue) }
         let showIntegrations = matchesSettingsSearch(SettingsTab.mcp.rawValue)
@@ -397,11 +380,7 @@ struct SettingsView: View {
     private var providerOverviewDetail: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 10) {
-                Text(
-                    selectedTab == .experimental
-                        ? "Experimental provider overview"
-                        : "Provider overview"
-                )
+                Text("Provider overview")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(theme.textTertiary)
 
@@ -426,7 +405,6 @@ struct SettingsView: View {
 
     private func providerOverviewChip(_ provider: AIProvider, in tab: SettingsTab) -> some View {
         let isSelected = selectedProvider == provider && selectedTab == tab
-        let isEnabled = experimentalToggleBinding(for: provider).wrappedValue
         let hasKey = providerHasRequiredCredentials(provider)
 
         return Button {
@@ -440,21 +418,11 @@ struct SettingsView: View {
 
                 Text(provider.rawValue)
                     .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                    .foregroundStyle(
-                        tab == .experimental && !isEnabled
-                            ? theme.textTertiary
-                            : (isSelected ? theme.textPrimary : theme.textSecondary)
-                    )
+                    .foregroundStyle(isSelected ? theme.textPrimary : theme.textSecondary)
 
-                if tab == .experimental {
-                    Image(systemName: isEnabled ? "bolt.fill" : "bolt.slash")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(isEnabled ? Color.orange : theme.textTertiary)
-                } else {
-                    Circle()
-                        .fill(hasKey ? Color.green.opacity(0.85) : theme.textTertiary.opacity(0.35))
-                        .frame(width: 7, height: 7)
-                }
+                Circle()
+                    .fill(hasKey ? Color.green.opacity(0.85) : theme.textTertiary.opacity(0.35))
+                    .frame(width: 7, height: 7)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
@@ -489,11 +457,7 @@ struct SettingsView: View {
 
             // Fields
             VStack(alignment: .leading, spacing: 20) {
-                if selectedProvider == .claudeCode {
-                    claudeCodeDetailView
-                } else if selectedProvider == .openAICodex {
-                    codexDetailView
-                } else if selectedProvider == .ollama {
+                if selectedProvider == .ollama {
                     ollamaDetailView
                 } else if selectedProvider == .openAICompatible {
                     openAICompatibleDetailView
@@ -506,20 +470,6 @@ struct SettingsView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity)
-        .onAppear {
-            if selectedProvider == .claudeCode {
-                checkClaudeCodeAvailability()
-            } else if selectedProvider == .openAICodex {
-                checkCodexAvailability()
-            }
-        }
-        .onChange(of: selectedProvider) { _, newValue in
-            if newValue == .claudeCode {
-                checkClaudeCodeAvailability()
-            } else if newValue == .openAICodex {
-                checkCodexAvailability()
-            }
-        }
         .onChange(of: selectedTab) { _, newValue in
             if newValue == .skills {
                 refreshSkills()
@@ -530,8 +480,6 @@ struct SettingsView: View {
             }
         }
     }
-
-    // MARK: - Claude Code Detail
 
     private var ollamaDetailView: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -570,350 +518,6 @@ struct SettingsView: View {
             )
             .font(.system(size: 12))
             .foregroundStyle(theme.textSecondary)
-        }
-    }
-
-    // MARK: - Claude Code Detail
-
-    private var claudeCodeDetailView: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // CLI Status
-            VStack(alignment: .leading, spacing: 8) {
-                Text("CLI Status")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(theme.textSecondary)
-
-                HStack(spacing: 10) {
-                    if let availability = claudeCodeAvailability {
-                        Circle()
-                            .fill(availability.isAvailable ? Color.green : Color.red)
-                            .frame(width: 8, height: 8)
-
-                        Text(availability.statusMessage)
-                            .font(.system(size: 13))
-                            .foregroundStyle(theme.textPrimary)
-                    } else {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text("Checking CLI availability...")
-                            .font(.system(size: 13))
-                            .foregroundStyle(theme.textSecondary)
-                    }
-
-                    Spacer()
-
-                    Button {
-                        checkClaudeCodeAvailability()
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 12))
-                            .foregroundStyle(theme.textSecondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Re-check CLI availability")
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(
-                    settingsControlBackground,
-                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(settingsBorderColor, lineWidth: 1)
-                )
-            }
-
-            // Install instructions
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Setup")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(theme.textSecondary)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Claude Code authenticates via the CLI itself — no API key needed.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(theme.textSecondary)
-
-                    HStack(spacing: 6) {
-                        Text("Install:")
-                            .font(.system(size: 12))
-                            .foregroundStyle(theme.textSecondary)
-
-                        Text("npm install -g @anthropic-ai/claude-code")
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(theme.textPrimary)
-                            .textSelection(.enabled)
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    theme.codeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(theme.codeBorder, lineWidth: 1)
-                )
-            }
-        }
-    }
-
-    private func checkClaudeCodeAvailability() {
-        claudeCodeAvailability = nil
-        Task {
-            let result = await ClaudeCodeAvailability.check()
-            await MainActor.run {
-                claudeCodeAvailability = result
-            }
-        }
-    }
-
-    // MARK: - OpenAI Codex Detail
-
-    private var codexDetailView: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // CLI Status
-            VStack(alignment: .leading, spacing: 8) {
-                Text("CLI Status")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(theme.textSecondary)
-
-                HStack(spacing: 10) {
-                    if let availability = codexAvailability {
-                        Circle()
-                            .fill(availability.isAvailable ? Color.green : Color.red)
-                            .frame(width: 8, height: 8)
-
-                        Text(availability.statusMessage)
-                            .font(.system(size: 13))
-                            .foregroundStyle(theme.textPrimary)
-                    } else {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text("Checking CLI availability...")
-                            .font(.system(size: 13))
-                            .foregroundStyle(theme.textSecondary)
-                    }
-
-                    Spacer()
-
-                    Button {
-                        checkCodexAvailability()
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 12))
-                            .foregroundStyle(theme.textSecondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Re-check CLI availability")
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(
-                    settingsControlBackground,
-                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(settingsBorderColor, lineWidth: 1)
-                )
-            }
-
-            // Authentication
-            if let availability = codexAvailability, availability.isAvailable {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Authentication")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(theme.textSecondary)
-
-                    HStack(spacing: 10) {
-                        if availability.isLoggedIn {
-                            Circle()
-                                .fill(Color.green)
-                                .frame(width: 8, height: 8)
-                            Text("Logged in via ChatGPT")
-                                .font(.system(size: 13))
-                                .foregroundStyle(theme.textPrimary)
-                        } else {
-                            Circle()
-                                .fill(Color.orange)
-                                .frame(width: 8, height: 8)
-                            Text("Not logged in")
-                                .font(.system(size: 13))
-                                .foregroundStyle(theme.textPrimary)
-                        }
-
-                        Spacer()
-
-                        if !availability.isLoggedIn {
-                            Button {
-                                loginToCodex()
-                            } label: {
-                                HStack(spacing: 4) {
-                                    if isLoggingIntoCodex {
-                                        ProgressView()
-                                            .controlSize(.mini)
-                                    }
-                                    Text(
-                                        isLoggingIntoCodex ? "Logging in..." : "Login with ChatGPT"
-                                    )
-                                    .font(.system(size: 12, weight: .medium))
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                            .disabled(isLoggingIntoCodex)
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(
-                        settingsControlBackground,
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(settingsBorderColor, lineWidth: 1)
-                    )
-                }
-            }
-
-            // Sandbox Mode
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Sandbox Mode")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(theme.textSecondary)
-
-                VStack(spacing: 4) {
-                    ForEach(Array(CodexSandboxMode.allCases), id: \.self) {
-                        (mode: CodexSandboxMode) in
-                        let modeSelected = (codexSandboxModeRaw == mode.rawValue)
-                        Button {
-                            codexSandboxModeRaw = mode.rawValue
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: mode.icon)
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(
-                                        modeSelected ? theme.accent : theme.textSecondary
-                                    )
-                                    .frame(width: 20)
-
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(mode.displayName)
-                                        .font(
-                                            .system(
-                                                size: 13,
-                                                weight: modeSelected ? .semibold : .regular)
-                                        )
-                                        .foregroundStyle(theme.textPrimary)
-
-                                    Text(mode.description)
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(theme.textSecondary)
-                                }
-
-                                Spacer()
-
-                                if modeSelected {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .font(.system(size: 14))
-                                        .foregroundStyle(theme.accent)
-                                }
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(
-                                modeSelected ? theme.accent.opacity(0.1) : Color.clear,
-                                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(4)
-                .background(
-                    settingsControlBackground,
-                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(settingsBorderColor, lineWidth: 1)
-                )
-            }
-
-            // Install instructions
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Setup")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(theme.textSecondary)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(
-                        "OpenAI Codex uses your ChatGPT Plus or Pro subscription — no API key needed."
-                    )
-                    .font(.system(size: 12))
-                    .foregroundStyle(theme.textSecondary)
-
-                    HStack(spacing: 6) {
-                        Text("Install:")
-                            .font(.system(size: 12))
-                            .foregroundStyle(theme.textSecondary)
-
-                        Text("npm install -g @openai/codex")
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(theme.textPrimary)
-                            .textSelection(.enabled)
-                    }
-
-                    HStack(spacing: 6) {
-                        Text("Or:")
-                            .font(.system(size: 12))
-                            .foregroundStyle(theme.textSecondary)
-
-                        Text("brew install --cask codex")
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(theme.textPrimary)
-                            .textSelection(.enabled)
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    theme.codeBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(theme.codeBorder, lineWidth: 1)
-                )
-            }
-        }
-    }
-
-    private func checkCodexAvailability() {
-        codexAvailability = nil
-        Task {
-            let result = await CodexAvailability.check()
-            await MainActor.run {
-                codexAvailability = result
-            }
-        }
-    }
-
-    private func loginToCodex() {
-        isLoggingIntoCodex = true
-        Task {
-            let success = await CodexAvailability.performLogin()
-            await MainActor.run {
-                isLoggingIntoCodex = false
-                if success {
-                    // Refresh availability to pick up new login status
-                    checkCodexAvailability()
-                }
-            }
         }
     }
 
@@ -1038,25 +642,11 @@ struct SettingsView: View {
     @ViewBuilder
     private var statusBadge: some View {
         let count = modelCounts[selectedProvider] ?? 0
-        let isEnabled =
-            !isExperimentalProvider(selectedProvider)
-            || experimentalToggleBinding(for: selectedProvider).wrappedValue
         let hasKey: Bool = {
             providerHasRequiredCredentials(selectedProvider)
         }()
 
-        if !isEnabled {
-            HStack(spacing: 4) {
-                Image(systemName: "pause.circle")
-                    .font(.system(size: 11))
-                Text("Disabled")
-                    .font(.system(size: 11))
-            }
-            .foregroundStyle(theme.textSecondary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(settingsControlBackground, in: Capsule())
-        } else if count > 0 {
+        if count > 0 {
             HStack(spacing: 4) {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 11))
@@ -2188,20 +1778,12 @@ struct SettingsView: View {
         case .gemini: return $geminiAPIKey
         case .kimi: return $kimiAPIKey
         case .ollama: return .constant("")  // Ollama uses local server, no API key
-        case .claudeCode: return .constant("")  // Claude Code doesn't use an API key
-        case .openAICodex: return .constant("")  // Codex doesn't use an API key
         }
     }
 
     private func providerHasRequiredCredentials(_ provider: AIProvider) -> Bool {
         if !provider.requiresAPIKey {
             return true
-        }
-        if provider == .claudeCode {
-            return claudeCodeAvailability?.isAvailable == true
-        }
-        if provider == .openAICodex {
-            return codexAvailability?.isAvailable == true
         }
 
         let hasKey = !apiKeyBinding(for: provider).wrappedValue.trimmingCharacters(
@@ -2228,9 +1810,7 @@ struct SettingsView: View {
         case .general, .skills, .mcp, .theme, .systemInstructions:
             return []
         case .providers:
-            return AIProvider.allCases.filter { !isExperimentalProvider($0) }
-        case .experimental:
-            return AIProvider.allCases.filter { isExperimentalProvider($0) }
+            return AIProvider.allCases
         }
     }
 
@@ -2248,22 +1828,4 @@ struct SettingsView: View {
         }
     }
 
-    private func settingsTab(for provider: AIProvider) -> SettingsTab {
-        isExperimentalProvider(provider) ? .experimental : .providers
-    }
-
-    private func experimentalToggleBinding(for provider: AIProvider) -> Binding<Bool> {
-        switch provider {
-        case .claudeCode:
-            return $isClaudeCodeEnabled
-        case .openAICodex:
-            return $isCodexEnabled
-        default:
-            return .constant(true)
-        }
-    }
-
-    private func isExperimentalProvider(_ provider: AIProvider) -> Bool {
-        provider == .claudeCode || provider == .openAICodex
-    }
 }

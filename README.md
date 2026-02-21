@@ -19,8 +19,6 @@ Simple native macOS AI chat app.
 - OpenRouter
 - Vercel AI Gateway
 - Gemini
-- Claude Code
-- OpenAI Codex
 
 ## Requirements
 
@@ -36,7 +34,7 @@ Simple native macOS AI chat app.
 ## Skills (skills.sh)
 
 ```sh
-# Install community skills for Codex (interactive)
+# Install community skills (interactive)
 ./skills.sh bootstrap
 
 # Or run any skills CLI command directly

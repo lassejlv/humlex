@@ -17,10 +17,6 @@ struct ContentView: View {
 
     @AppStorage("selected_model_reference") private var selectedModelReference: String = ""
     @AppStorage("selected_thread_id") private var selectedThreadIDRaw: String = ""
-    @AppStorage("codex_sandbox_mode") private var codexSandboxModeRaw: String = CodexSandboxMode
-        .readOnly.rawValue
-    @AppStorage("experimental_claude_code_enabled") private var isClaudeCodeEnabled = false
-    @AppStorage("experimental_codex_enabled") private var isCodexEnabled = false
     @AppStorage("provider_ollama_enabled") private var isOllamaEnabled = true
     @AppStorage("auto_scroll_enabled") private var isAutoScrollEnabled = true
     @AppStorage("performance_mode_enabled") private var isPerformanceModeEnabled = true
@@ -1300,19 +1296,6 @@ struct ContentView: View {
             return KimiAdapter()
         case .ollama:
             return OllamaAdapter()
-        case .claudeCode:
-            var adapter = ClaudeCodeAdapter()
-            if let idx = selectedThreadIndex {
-                adapter.workingDirectory = threads[idx].workingDirectory
-            }
-            return adapter
-        case .openAICodex:
-            var adapter = OpenAICodexAdapter()
-            if let idx = selectedThreadIndex {
-                adapter.workingDirectory = threads[idx].workingDirectory
-            }
-            adapter.sandboxMode = CodexSandboxMode(rawValue: codexSandboxModeRaw) ?? .readOnly
-            return adapter
         }
     }
 
@@ -1336,10 +1319,6 @@ struct ContentView: View {
             return kimiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         case .ollama:
             return ""
-        case .claudeCode:
-            return "claude-code"  // Sentinel value — Claude Code authenticates via CLI
-        case .openAICodex:
-            return "codex"  // Sentinel value — Codex authenticates via CLI
         }
     }
 
@@ -1347,10 +1326,6 @@ struct ContentView: View {
         switch provider {
         case .ollama:
             return isOllamaEnabled
-        case .claudeCode:
-            return isClaudeCodeEnabled
-        case .openAICodex:
-            return isCodexEnabled
         default:
             return true
         }
@@ -2020,16 +1995,10 @@ struct ContentView: View {
 
         // Merge tools: MCP tools + built-in agent tools (if agent mode is on)
         // Always include fetch tool for normal chat mode
-        // Claude Code and Codex handle their own tools internally — don't pass ours.
-        let isCLIProvider =
-            model.provider == .claudeCode
-            || model.provider == .openAICodex
         let availableTools: [MCPTool] =
-            isCLIProvider
-            ? []
-            : (isAgent
-                ? mcpManager.tools + AgentTools.definitions()
-                : mcpManager.tools + AgentTools.fetchDefinitions())
+            isAgent
+            ? mcpManager.tools + AgentTools.definitions()
+            : mcpManager.tools + AgentTools.fetchDefinitions()
 
         let skillActivation: HumlexSkillActivation = {
             let latestUserText =
@@ -2203,23 +2172,6 @@ struct ContentView: View {
                             $0.id == assistantID
                         })
                     else {
-                        return
-                    }
-
-                    if isCLIProvider {
-                        // CLI providers (Claude Code, Codex) handle tools internally.
-                        // Store tool calls on the message for display only — do NOT execute them.
-                        let resolvedToolCalls = result.toolCalls.map { tc -> ChatMessage.ToolCall in
-                            ChatMessage.ToolCall(
-                                id: tc.id,
-                                name: tc.name,
-                                arguments: tc.arguments,
-                                serverName: tc.serverName,
-                                thoughtSignature: tc.thoughtSignature
-                            )
-                        }
-                        threads[threadIdx].messages[msgIdx].toolCalls = resolvedToolCalls
-                        // Done — no tool execution, no loop continuation
                         return
                     }
 

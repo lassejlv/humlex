@@ -110,8 +110,6 @@ extension AIProvider {
         case .gemini: return "google"
         case .kimi: return "moonshot"
         case .ollama: return "ollama"
-        case .claudeCode: return "anthropic"
-        case .openAICodex: return "openai"
         }
     }
 }

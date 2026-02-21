@@ -10,8 +10,6 @@ enum AIProvider: String, CaseIterable, Identifiable, Hashable {
     case gemini = "Gemini"
     case kimi = "Kimi for Coding"
     case ollama = "Ollama"
-    case claudeCode = "Claude Code"
-    case openAICodex = "OpenAI Codex"
 
     var id: String { rawValue }
 
@@ -35,17 +33,13 @@ enum AIProvider: String, CaseIterable, Identifiable, Hashable {
             return "kimi_api_key"
         case .ollama:
             return "ollama_config"
-        case .claudeCode:
-            return "claude_code_config"
-        case .openAICodex:
-            return "openai_codex_config"
         }
     }
 
     /// Whether this provider requires a traditional API key.
     var requiresAPIKey: Bool {
         switch self {
-        case .ollama, .claudeCode, .openAICodex: return false
+        case .ollama: return false
         default: return true
         }
     }
@@ -177,8 +171,8 @@ enum ModelRegistry {
             return knownModels["__gemini_default__"]!
         case .kimi:
             return knownModels["__kimi_default__"]!
-        case .ollama, .claudeCode, .openAICodex:
-            // Ollama and CLI providers - use a conservative default
+        case .ollama:
+            // Ollama - use a conservative default
             return ModelSpecs(contextWindow: 128_000, maxOutputTokens: 4_096)
         }
     }
