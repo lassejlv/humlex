@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import Darwin
 
 /// HTTP fetch tool for making web requests.
 /// Allows AI to retrieve data from APIs, websites, and other HTTP endpoints.
@@ -53,9 +54,9 @@ struct FetchTool: BuiltInTool {
             return "Error: Only HTTP and HTTPS URLs are allowed"
         }
         
-        // Security: Block private/local addresses
-        if isPrivateOrLocalURL(url) {
-            return "Error: Access to localhost, private IPs, or internal networks is not allowed"
+        // Security: Block localhost/private/internal network targets.
+        if let blockedReason = blockedNetworkReason(for: url) {
+            return "Error: \(blockedReason)"
         }
         
         // Build request
@@ -148,60 +149,136 @@ struct FetchTool: BuiltInTool {
     
     // MARK: - Security
     
-    /// Check if URL points to private/local addresses that should be blocked.
-    private func isPrivateOrLocalURL(_ url: URL) -> Bool {
-        guard let host = url.host?.lowercased() else { return true }
-        
-        // Block localhost variants
-        if host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "0.0.0.0" {
-            return true
+    /// Returns a human-readable security reason when a URL should be blocked.
+    private func blockedNetworkReason(for url: URL) -> String? {
+        guard let host = url.host?.lowercased(), !host.isEmpty else {
+            return "Invalid host"
         }
-        
-        // Block private IP ranges
-        if isPrivateIP(host) {
-            return true
+
+        // Block obvious local names immediately.
+        if host == "localhost" || host == "localhost." || host.hasSuffix(".local") {
+            return "Access to localhost or local network hosts is not allowed"
         }
-        
-        // Block common internal hostnames
-        let blockedHosts = [
-            "internal", "intranet", "local", "private",
-            "192.168", "10.", "172.16", "172.17", "172.18", "172.19",
-            "172.20", "172.21", "172.22", "172.23", "172.24",
-            "172.25", "172.26", "172.27", "172.28", "172.29",
-            "172.30", "172.31"
-        ]
-        
-        for blocked in blockedHosts {
-            if host.contains(blocked) {
-                return true
+
+        guard let addresses = resolveHostAddresses(host) else {
+            return "Could not resolve host '\(host)'"
+        }
+        guard !addresses.isEmpty else {
+            return "Could not resolve host '\(host)'"
+        }
+
+        for address in addresses {
+            if isDisallowedAddress(address) {
+                return "Access to localhost, private IPs, or internal networks is not allowed"
             }
         }
-        
+
+        return nil
+    }
+
+    private enum ResolvedAddress {
+        case ipv4(UInt32)
+        case ipv6([UInt8])
+    }
+
+    /// Resolves hostnames to IP addresses using system DNS resolution.
+    private func resolveHostAddresses(_ host: String) -> [ResolvedAddress]? {
+        var hints = addrinfo(
+            ai_flags: AI_ADDRCONFIG,
+            ai_family: AF_UNSPEC,
+            ai_socktype: SOCK_STREAM,
+            ai_protocol: 0,
+            ai_addrlen: 0,
+            ai_canonname: nil,
+            ai_addr: nil,
+            ai_next: nil
+        )
+
+        var result: UnsafeMutablePointer<addrinfo>?
+        let status = getaddrinfo(host, nil, &hints, &result)
+        guard status == 0 else { return nil }
+        defer { freeaddrinfo(result) }
+
+        var addresses: [ResolvedAddress] = []
+        var pointer = result
+        while let info = pointer {
+            if info.pointee.ai_family == AF_INET,
+                let addr = info.pointee.ai_addr?.withMemoryRebound(to: sockaddr_in.self, capacity: 1, {
+                    $0.pointee
+                })
+            {
+                addresses.append(.ipv4(UInt32(bigEndian: addr.sin_addr.s_addr)))
+            } else if info.pointee.ai_family == AF_INET6,
+                let addr6 = info.pointee.ai_addr?.withMemoryRebound(to: sockaddr_in6.self, capacity: 1, {
+                    $0.pointee
+                })
+            {
+                let bytes = withUnsafeBytes(of: addr6.sin6_addr.__u6_addr.__u6_addr8) { Array($0) }
+                addresses.append(.ipv6(bytes))
+            }
+            pointer = info.pointee.ai_next
+        }
+
+        return addresses
+    }
+
+    private func isDisallowedAddress(_ address: ResolvedAddress) -> Bool {
+        switch address {
+        case .ipv4(let value):
+            return isDisallowedIPv4(value)
+        case .ipv6(let bytes):
+            return isDisallowedIPv6(bytes)
+        }
+    }
+
+    /// RFC1918, loopback, link-local, multicast, CGNAT, and benchmark ranges.
+    private func isDisallowedIPv4(_ value: UInt32) -> Bool {
+        let first = (value >> 24) & 0xff
+        let second = (value >> 16) & 0xff
+
+        if first == 0 { return true }  // 0.0.0.0/8
+        if first == 10 { return true }  // 10.0.0.0/8
+        if first == 127 { return true }  // 127.0.0.0/8
+        if first == 169 && second == 254 { return true }  // 169.254.0.0/16
+        if first == 172 && (16...31).contains(Int(second)) { return true }  // 172.16.0.0/12
+        if first == 192 && second == 168 { return true }  // 192.168.0.0/16
+        if first == 100 && (64...127).contains(Int(second)) { return true }  // 100.64.0.0/10
+        if first == 198 && (second == 18 || second == 19) { return true }  // 198.18.0.0/15
+        if first >= 224 { return true }  // Multicast/reserved/broadcast
         return false
     }
-    
-    /// Check if host string is a private IP address.
-    private func isPrivateIP(_ host: String) -> Bool {
-        // Check for IPv4 private ranges
-        let ipv4PrivatePatterns = [
-            "^127\\.",              // Loopback
-            "^10\\.",               // Class A private
-            "^172\\.(1[6-9]|2[0-9]|3[0-1])\\.",  // Class B private
-            "^192\\.168\\.",        // Class C private
-            "^169\\.254\\."         // Link-local
-        ]
-        
-        for pattern in ipv4PrivatePatterns {
-            if host.range(of: pattern, options: .regularExpression) != nil {
-                return true
-            }
+
+    /// Loopback, unique-local, link-local, multicast, unspecified, and IPv4-mapped private.
+    private func isDisallowedIPv6(_ bytes: [UInt8]) -> Bool {
+        guard bytes.count == 16 else { return true }
+
+        // :: (unspecified)
+        if bytes.allSatisfy({ $0 == 0 }) { return true }
+
+        // ::1 (loopback)
+        if bytes.dropLast().allSatisfy({ $0 == 0 }) && bytes.last == 1 { return true }
+
+        // fc00::/7 (unique-local)
+        if (bytes[0] & 0xfe) == 0xfc { return true }
+
+        // fe80::/10 (link-local)
+        if bytes[0] == 0xfe && (bytes[1] & 0xc0) == 0x80 { return true }
+
+        // ff00::/8 (multicast)
+        if bytes[0] == 0xff { return true }
+
+        // ::ffff:a.b.c.d (IPv4-mapped IPv6)
+        let isIPv4Mapped =
+            bytes[0...9].allSatisfy { $0 == 0 } && bytes[10] == 0xff && bytes[11] == 0xff
+        if isIPv4Mapped {
+            let v4 =
+                (UInt32(bytes[12]) << 24)
+                | (UInt32(bytes[13]) << 16)
+                | (UInt32(bytes[14]) << 8)
+                | UInt32(bytes[15])
+            return isDisallowedIPv4(v4)
         }
-        
-        // Check for IPv6 loopback
-        if host == "::1" || host == "::" || host.hasPrefix("fe80::") {
-            return true
-        }
-        
+
         return false
     }
 }

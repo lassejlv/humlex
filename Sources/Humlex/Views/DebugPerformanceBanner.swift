@@ -2,7 +2,7 @@
 //  DebugPerformanceBanner.swift
 //  AI Chat
 //
-//  Created by Codex on 12/02/2026.
+//  Created by Lasse Vestergaard on 12/02/2026.
 //
 
 import Foundation
@@ -15,8 +15,11 @@ struct DebugPerformanceBanner: View {
     var body: some View {
         HStack(spacing: 10) {
             valuePill(title: "FPS", value: "\(monitor.fps)", color: fpsColor)
-            valuePill(title: "CPU", value: String(format: "%.1f%%", monitor.cpuPercent), color: cpuColor)
-            valuePill(title: "MEM", value: String(format: "%.0f MB", monitor.memoryMB), color: memoryColor)
+            valuePill(
+                title: "CPU", value: String(format: "%.1f%%", monitor.cpuPercent), color: cpuColor)
+            valuePill(
+                title: "MEM", value: String(format: "%.0f MB", monitor.memoryMB), color: memoryColor
+            )
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)

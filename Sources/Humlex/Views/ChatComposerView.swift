@@ -1,5 +1,5 @@
-import AppKit
 import Foundation
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -30,6 +30,7 @@ struct ChatComposerView: View {
     let onShowUndo: () -> Void
 
     @Environment(\.appTheme) private var theme
+    @Environment(\.toastManager) private var toastManager
     @AppStorage("chat_font_size") private var chatFontSize = 13.0
     @FocusState private var isFocused: Bool
     @State private var isShowingDirectoryPicker = false
@@ -43,6 +44,15 @@ struct ChatComposerView: View {
     @State private var isShowingModelPicker = false
     @State private var modelSearchText = ""
     @State private var isDraggingOver = false
+    @State private var isShowingDangerousModeAlert = false
+
+    private let maxAttachmentSizeBytes = 5 * 1024 * 1024
+    private let blockedAttachmentExtensions: Set<String> = [
+        "env", "pem", "key", "p12", "pfx", "cer", "crt", "jks", "keystore", "mobileprovision",
+    ]
+    private let blockedAttachmentNames: Set<String> = [
+        ".env", "id_rsa", "id_ed25519", "known_hosts", "credentials.json",
+    ]
 
     private var selectedModelLabel: String {
         models.first(where: { $0.reference == selectedModelReference })?.displayName
@@ -182,7 +192,11 @@ struct ChatComposerView: View {
                     // Dangerous mode toggle (only shown when agent is enabled)
                     if agentEnabled {
                         Button {
-                            dangerousMode.toggle()
+                            if dangerousMode {
+                                dangerousMode = false
+                            } else {
+                                isShowingDangerousModeAlert = true
+                            }
                         } label: {
                             Image(systemName: dangerousMode ? "bolt.fill" : "bolt")
                                 .font(.system(size: 13))
@@ -192,7 +206,7 @@ struct ChatComposerView: View {
                         .help(
                             dangerousMode
                                 ? "Dangerous mode ON — auto-approves all tools. Click to disable"
-                                : "Enable dangerous mode — auto-approve tools (changes can be reverted)"
+                                : "Enable dangerous mode — auto-approve destructive tools"
                         )
                     }
 
@@ -326,6 +340,16 @@ struct ChatComposerView: View {
         .padding(.horizontal, 20)
         .padding(.bottom, 14)
         .padding(.top, 8)
+        .alert("Enable Dangerous Mode", isPresented: $isShowingDangerousModeAlert) {
+            Button("Cancel", role: .cancel) {}
+            Button("Enable", role: .destructive) {
+                dangerousMode = true
+            }
+        } message: {
+            Text(
+                "Dangerous mode auto-approves destructive tools and commands. Only enable this in trusted directories."
+            )
+        }
         .onReceive(NotificationCenter.default.publisher(for: .openModelPickerRequested)) { _ in
             isShowingModelPicker = true
         }
@@ -735,9 +759,7 @@ struct ChatComposerView: View {
 
         // Attach the file
         let url = URL(fileURLWithPath: entry.fullPath)
-        if let attachment = loadAttachment(from: url) {
-            attachments.append(attachment)
-        }
+        addAttachment(from: url)
 
         dismissMentionPopup()
     }
@@ -810,10 +832,40 @@ struct ChatComposerView: View {
 
     private func appendAttachments(from urls: [URL]) {
         for url in urls {
-            if let attachment = loadAttachment(from: url) {
-                attachments.append(attachment)
-            }
+            addAttachment(from: url)
         }
+    }
+
+    private func addAttachment(from url: URL) {
+        if let validationError = attachmentValidationError(for: url) {
+            toastManager.show(.error(validationError))
+            return
+        }
+
+        guard let attachment = loadAttachment(from: url) else {
+            toastManager.show(.error("Could not attach \(url.lastPathComponent)"))
+            return
+        }
+
+        attachments.append(attachment)
+    }
+
+    private func attachmentValidationError(for url: URL) -> String? {
+        let name = url.lastPathComponent
+        let loweredName = name.lowercased()
+        let ext = url.pathExtension.lowercased()
+
+        if blockedAttachmentNames.contains(loweredName) || blockedAttachmentExtensions.contains(ext) {
+            return "Blocked sensitive file: \(name)"
+        }
+
+        let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        if fileSize > maxAttachmentSizeBytes {
+            let maxMB = maxAttachmentSizeBytes / (1024 * 1024)
+            return "\(name) is too large (max \(maxMB) MB)"
+        }
+
+        return nil
     }
 
     private func presentAttachmentOpenPanel() {
@@ -841,9 +893,19 @@ struct ChatComposerView: View {
                     let urlString = String(data: data, encoding: .utf8),
                     let url = URL(string: urlString)
                 else { return }
+                if let validationError = attachmentValidationError(for: url) {
+                    DispatchQueue.main.async {
+                        toastManager.show(.error(validationError))
+                    }
+                    return
+                }
                 if let attachment = loadAttachment(from: url) {
                     DispatchQueue.main.async {
                         attachments.append(attachment)
+                    }
+                } else {
+                    DispatchQueue.main.async {
+                        toastManager.show(.error("Could not attach \(url.lastPathComponent)"))
                     }
                 }
             }

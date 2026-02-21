@@ -2,7 +2,7 @@
 //  AppStatusBarView.swift
 //  AI Chat
 //
-//  Created by Codex on 12/02/2026.
+//  Created by Lasse Vestergaard on 12/02/2026.
 //
 
 import Foundation

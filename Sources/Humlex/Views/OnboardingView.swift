@@ -2,7 +2,7 @@
 //  OnboardingView.swift
 //  AI Chat
 //
-//  Created by Codex on 19/02/2026.
+//  Created by Lasse Vestergaard on 19/02/2026.
 //
 
 import Foundation

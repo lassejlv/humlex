@@ -2,11 +2,11 @@
 //  DebugPerformanceMonitor.swift
 //  AI Chat
 //
-//  Created by Codex on 12/02/2026.
+//  Created by Lasse Vestergaard on 12/02/2026.
 //
 
-import Foundation
 import Darwin
+import Foundation
 
 @MainActor
 final class DebugPerformanceMonitor: ObservableObject {
@@ -26,7 +26,8 @@ final class DebugPerformanceMonitor: ObservableObject {
         lastSampleTime = CFAbsoluteTimeGetCurrent()
 
         let frameTimer = DispatchSource.makeTimerSource(queue: DispatchQueue.main)
-        frameTimer.schedule(deadline: .now(), repeating: .milliseconds(16), leeway: .milliseconds(4))
+        frameTimer.schedule(
+            deadline: .now(), repeating: .milliseconds(16), leeway: .milliseconds(4))
         frameTimer.setEventHandler { [weak self] in
             guard let self else { return }
             self.frameCount += 1

@@ -10,6 +10,13 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
+    private enum SidebarGroup: String, CaseIterable {
+        case today = "Today"
+        case yesterday = "Yesterday"
+        case thisWeek = "This Week"
+        case older = "Older"
+    }
+
     private enum ChatImportMode {
         case merge
         case replace
@@ -20,6 +27,8 @@ struct ContentView: View {
     @AppStorage("provider_ollama_enabled") private var isOllamaEnabled = true
     @AppStorage("auto_scroll_enabled") private var isAutoScrollEnabled = true
     @AppStorage("performance_mode_enabled") private var isPerformanceModeEnabled = true
+    @AppStorage("default_system_instructions") private var defaultSystemInstructions: String = ""
+    @AppStorage("pinned_thread_ids") private var pinnedThreadIDsRaw: String = ""
     @AppStorage("performance_visible_message_limit") private var performanceVisibleMessageLimit =
         250
     @AppStorage("debug_mode_enabled") private var isDebugModeEnabled = false
@@ -128,6 +137,21 @@ struct ContentView: View {
     @Environment(\.appTheme) private var theme
     @Environment(\.toastManager) private var toastManager
 
+    private let assistantSafetyBaselinePrompt =
+        """
+        You are Humlex, a helpful and professional AI assistant.
+        Keep responses respectful and avoid sexual, harassing, hateful, or explicit roleplay content.
+        If a request is unsafe or inappropriate, decline briefly and redirect to productive help.
+        Prioritize accurate, practical, and safe responses.
+        """
+
+    private let chatDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }()
+
     private var selectedThreadIndex: Int? {
         guard let id = selectedThreadID else { return nil }
         return threads.firstIndex(where: { $0.id == id })
@@ -135,6 +159,72 @@ struct ContentView: View {
 
     private var selectedModel: LLMModel? {
         models.first(where: { $0.reference == selectedModelReference })
+    }
+
+    private var preferredDefaultModelReference: String {
+        guard let preferred = models.sorted(by: isPreferredDefaultModel(_:_:)).first else {
+            return selectedModelReference
+        }
+        return preferred.reference
+    }
+
+    private func isPreferredDefaultModel(_ lhs: LLMModel, _ rhs: LLMModel) -> Bool {
+        let lhsScore = preferredModelScore(lhs)
+        let rhsScore = preferredModelScore(rhs)
+        if lhsScore != rhsScore { return lhsScore > rhsScore }
+
+        let idCompare = lhs.modelID.localizedStandardCompare(rhs.modelID)
+        if idCompare != .orderedSame { return idCompare == .orderedDescending }
+
+        return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedDescending
+    }
+
+    private func preferredModelScore(_ model: LLMModel) -> Int {
+        let text = "\(model.modelID) \(model.displayName)".lowercased()
+        var score = 0
+
+        if text.contains("latest") { score += 120 }
+        if text.contains("preview") { score += 90 }
+        if text.contains("thinking") { score += 15 }
+        if text.contains("mini") { score -= 8 }
+
+        switch model.provider {
+        case .openAI:
+            if text.contains("gpt-5") { score += 80 }
+            if text.contains("gpt-4.1") || text.contains("gpt-4o") { score += 45 }
+            if text.contains("o3") || text.contains("o1") { score += 20 }
+        case .anthropic:
+            if text.contains("sonnet") { score += 45 }
+            if text.contains("opus") { score += 35 }
+            if text.contains("haiku") { score -= 10 }
+        case .gemini:
+            if text.contains("2.5") { score += 55 }
+            if text.contains("2.0") { score += 35 }
+            if text.contains("1.5") { score += 15 }
+            if text.contains("flash") { score += 8 }
+        case .openRouter, .fastRouter, .vercelAI, .openAICompatible, .kimi, .ollama:
+            break
+        }
+
+        return score
+    }
+
+    private func isImageGenerationModel(_ model: LLMModel) -> Bool {
+        let text = "\(model.modelID) \(model.displayName)".lowercased()
+        let blockedTerms = [
+            "image",
+            "images",
+            "dall-e",
+            "dalle",
+            "gpt-image",
+            "recraft",
+            "midjourney",
+            "stable-diffusion",
+            "sdxl",
+            "flux",
+            "imagen",
+        ]
+        return blockedTerms.contains(where: { text.contains($0) })
     }
 
     private var selectedModelLabel: String {
@@ -164,6 +254,43 @@ struct ContentView: View {
         }
         let idSet = Set(filteredThreadIDs)
         return threads.filter { idSet.contains($0.id) }
+    }
+
+    private var sortedFilteredThreads: [ChatThread] {
+        let orderByID = Dictionary(uniqueKeysWithValues: threads.enumerated().map { ($0.element.id, $0.offset) })
+        return filteredThreads.sorted { lhs, rhs in
+            let lhsDate = lhs.messages.last?.timestamp ?? .distantFuture
+            let rhsDate = rhs.messages.last?.timestamp ?? .distantFuture
+            if lhsDate == rhsDate {
+                let lhsOrder = orderByID[lhs.id] ?? .max
+                let rhsOrder = orderByID[rhs.id] ?? .max
+                return lhsOrder < rhsOrder
+            }
+            return lhsDate > rhsDate
+        }
+    }
+
+    private var pinnedThreadIDs: Set<UUID> {
+        Set(
+            pinnedThreadIDsRaw
+                .split(separator: ",")
+                .compactMap { UUID(uuidString: String($0)) }
+        )
+    }
+
+    private var pinnedThreads: [ChatThread] {
+        sortedFilteredThreads.filter { pinnedThreadIDs.contains($0.id) }
+    }
+
+    private var groupedUnpinnedThreads: [(group: SidebarGroup, threads: [ChatThread])] {
+        let unpinned = sortedFilteredThreads.filter { !pinnedThreadIDs.contains($0.id) }
+        let grouped = Dictionary(grouping: unpinned) { thread in
+            sidebarGroup(for: thread)
+        }
+        return SidebarGroup.allCases.compactMap { group in
+            guard let items = grouped[group], !items.isEmpty else { return nil }
+            return (group: group, threads: items)
+        }
     }
 
     private var currentMessages: [ChatMessage] {
@@ -254,6 +381,18 @@ struct ContentView: View {
         )
     }
 
+    /// Binding for selected model that also persists model per thread.
+    private var selectedModelReferenceBinding: Binding<String> {
+        Binding(
+            get: { selectedModelReference },
+            set: { newValue in
+                selectedModelReference = newValue
+                guard let idx = selectedThreadIndex else { return }
+                threads[idx].modelReference = newValue.isEmpty ? nil : newValue
+            }
+        )
+    }
+
     var body: some View { mainView }
 
     private var mainView: some View { buildMainView() }
@@ -309,6 +448,7 @@ struct ContentView: View {
                 }
 
                 loadChatsFromDisk()
+                applyDefaultSystemPromptToUntitledThreads()
 
                 if let persistedID = UUID(uuidString: selectedThreadIDRaw),
                     threads.contains(where: { $0.id == persistedID })
@@ -397,6 +537,7 @@ struct ContentView: View {
                 if let id = newValue, messageRenderLimitByThread[id] == nil {
                     messageRenderLimitByThread[id] = resolvedVisibleMessageLimit
                 }
+                syncSelectedModelWithCurrentThread()
                 refreshTokenEstimate(for: newValue, immediate: true)
             }
             .onChange(of: isPerformanceModeEnabled) { _, newValue in
@@ -507,39 +648,45 @@ struct ContentView: View {
 
     private var sidebarView: some View {
         VStack(spacing: 0) {
-            List(selection: $selectedThreadID) {
-                Section("Chats") {
-                    ForEach(filteredThreads) { thread in
-                        let isSelected = thread.id == selectedThreadID
-                        ThreadRow(thread: thread, isSelected: isSelected)
-                            .tag(thread.id as UUID?)
-                            .contextMenu {
-                                Button {
-                                    exportThreadToMarkdown(thread)
-                                } label: {
-                                    Label("Export to Markdown", systemImage: "doc.text")
-                                }
+            sidebarHeader
 
-                                Divider()
-
-                                Button(role: .destructive) {
-                                    threadToDelete = thread
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
+            if filteredThreads.isEmpty {
+                sidebarEmptyState
+                    .contextMenu {
+                        Button(role: .destructive) {
+                            isShowingDeleteAllChatsAlert = true
+                        } label: {
+                            Label("Delete All Chats", systemImage: "trash.slash")
+                        }
+                    }
+            } else {
+                List(selection: $selectedThreadID) {
+                    if !pinnedThreads.isEmpty {
+                        Section("Pinned") {
+                            ForEach(pinnedThreads) { thread in
+                                sidebarThreadListRow(thread)
                             }
+                        }
+                    }
+
+                    ForEach(groupedUnpinnedThreads, id: \.group) { section in
+                        Section(section.group.rawValue) {
+                            ForEach(section.threads) { thread in
+                                sidebarThreadListRow(thread)
+                            }
+                        }
                     }
                 }
-            }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
-            .background(theme.sidebarBackground)
-            .searchable(text: $searchText, placement: .sidebar, prompt: Text("Search"))
-            .contextMenu {
-                Button(role: .destructive) {
-                    isShowingDeleteAllChatsAlert = true
-                } label: {
-                    Label("Delete All Chats", systemImage: "trash.slash")
+                .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
+                .background(theme.sidebarBackground)
+                .searchable(text: $searchText, placement: .sidebar, prompt: Text("Search"))
+                .contextMenu {
+                    Button(role: .destructive) {
+                        isShowingDeleteAllChatsAlert = true
+                    } label: {
+                        Label("Delete All Chats", systemImage: "trash.slash")
+                    }
                 }
             }
 
@@ -562,6 +709,112 @@ struct ContentView: View {
             DispatchQueue.main.asyncAfter(
                 deadline: .now() + searchDebounceInterval, execute: workItem)
         }
+    }
+
+    private func sidebarThreadListRow(_ thread: ChatThread) -> some View {
+        let isSelected = thread.id == selectedThreadID
+        let isPinned = pinnedThreadIDs.contains(thread.id)
+        return ThreadRow(thread: thread, isSelected: isSelected, isPinned: isPinned)
+            .tag(thread.id as UUID?)
+            .listRowInsets(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8))
+            .contextMenu {
+                Button {
+                    togglePinnedState(for: thread.id)
+                } label: {
+                    Label(isPinned ? "Unpin" : "Pin", systemImage: isPinned ? "pin.slash" : "pin")
+                }
+
+                Button {
+                    exportThreadToMarkdown(thread)
+                } label: {
+                    Label("Export to Markdown", systemImage: "doc.text")
+                }
+
+                Divider()
+
+                Button(role: .destructive) {
+                    threadToDelete = thread
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+    }
+
+    private var sidebarHeader: some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Chats")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(theme.textSecondary)
+                Text("\(filteredThreads.count) total")
+                    .font(.system(size: 10))
+                    .foregroundStyle(theme.textTertiary)
+            }
+
+            Spacer(minLength: 0)
+
+            Button {
+                createThread()
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(theme.textSecondary)
+                    .frame(width: 20, height: 20)
+                    .background(theme.hoverBackground, in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(theme.chipBorder.opacity(0.8), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .help("New chat")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+    }
+
+    private func togglePinnedState(for threadID: UUID) {
+        var ids = pinnedThreadIDs
+        if ids.contains(threadID) {
+            ids.remove(threadID)
+        } else {
+            ids.insert(threadID)
+        }
+        pinnedThreadIDsRaw = ids.map(\.uuidString).sorted().joined(separator: ",")
+    }
+
+    private func sidebarGroup(for thread: ChatThread) -> SidebarGroup {
+        guard let lastDate = thread.messages.last?.timestamp else {
+            return .today
+        }
+
+        let calendar = Calendar.current
+        if calendar.isDateInToday(lastDate) { return .today }
+        if calendar.isDateInYesterday(lastDate) { return .yesterday }
+        if let days = calendar.dateComponents([.day], from: lastDate, to: Date()).day,
+            days < 7
+        {
+            return .thisWeek
+        }
+        return .older
+    }
+
+    private var sidebarEmptyState: some View {
+        VStack(spacing: 10) {
+            Spacer()
+            Image(systemName: searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass")
+                .font(.system(size: 22))
+                .foregroundStyle(theme.textTertiary)
+            Text(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "No chats yet" : "No matching chats")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(theme.textSecondary)
+            Text(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Start a conversation to see it here." : "Try a different search term.")
+                .font(.system(size: 11))
+                .foregroundStyle(theme.textTertiary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        .background(theme.sidebarBackground)
     }
 
     private var detailView: some View {
@@ -752,9 +1005,22 @@ struct ContentView: View {
                 }
 
                 let lastAssistantID = currentMessages.last(where: { $0.role == .assistant })?.id
-                ForEach(visibleCurrentMessages) { message in
-                    messageRow(for: message, lastAssistantID: lastAssistantID)
+                let indexedMessages = Array(visibleCurrentMessages.enumerated())
+                ForEach(indexedMessages, id: \.element.id) { index, message in
+                    if shouldHideMergedToolMessage(at: index, in: visibleCurrentMessages) {
+                        EmptyView()
+                    } else {
+                    if shouldShowDateSeparator(at: index, in: visibleCurrentMessages) {
+                        dateSeparator(for: message.timestamp)
+                    }
+                        messageRow(
+                            for: message,
+                            at: index,
+                            in: visibleCurrentMessages,
+                            lastAssistantID: lastAssistantID
+                        )
                         .id(message.id)
+                    }
                 }
             }
             .padding(.horizontal, 24)
@@ -811,6 +1077,42 @@ struct ContentView: View {
         .padding(.bottom, 8)
     }
 
+    private func shouldShowDateSeparator(at index: Int, in messages: [ChatMessage]) -> Bool {
+        guard index < messages.count else { return false }
+        guard index > 0 else { return true }
+        return !Calendar.current.isDate(messages[index].timestamp, inSameDayAs: messages[index - 1].timestamp)
+    }
+
+    private func dateSeparator(for date: Date) -> some View {
+        let calendar = Calendar.current
+        let label: String
+        if calendar.isDateInToday(date) {
+            label = "Today"
+        } else if calendar.isDateInYesterday(date) {
+            label = "Yesterday"
+        } else {
+            label = chatDateFormatter.string(from: date)
+        }
+
+        return HStack(spacing: 10) {
+            Rectangle()
+                .fill(theme.divider.opacity(0.5))
+                .frame(height: 1)
+
+            Text(label)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(theme.textTertiary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(theme.hoverBackground.opacity(0.75), in: Capsule())
+
+            Rectangle()
+                .fill(theme.divider.opacity(0.5))
+                .frame(height: 1)
+        }
+        .padding(.vertical, 2)
+    }
+
     private func newMessagesOverlay(proxy: ScrollViewProxy) -> some View {
         Group {
             if isUserScrolledUp && hasUnreadMessages {
@@ -855,7 +1157,7 @@ struct ContentView: View {
             draft: $draft,
             attachments: $pendingAttachments,
             models: models,
-            selectedModelReference: $selectedModelReference,
+            selectedModelReference: selectedModelReferenceBinding,
             agentEnabled: agentEnabledBinding,
             dangerousMode: dangerousModeBinding,
             workingDirectory: workingDirectoryBinding,
@@ -912,9 +1214,20 @@ struct ContentView: View {
     }
 
     private func createThread() {
-        let thread = ChatThread(id: UUID(), title: "New Chat", messages: [])
+        let thread = newThread()
         threads.insert(thread, at: 0)
         selectedThreadID = thread.id
+    }
+
+    private func newThread() -> ChatThread {
+        let modelReference = preferredDefaultModelReference.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ChatThread(
+            id: UUID(),
+            title: "New Chat",
+            messages: [],
+            systemPrompt: resolvedDefaultSystemPrompt,
+            modelReference: modelReference.isEmpty ? nil : modelReference
+        )
     }
 
     private func buildCommandPaletteActions() -> [CommandAction] {
@@ -1057,7 +1370,7 @@ struct ContentView: View {
         } catch {
             statusMessage = "Failed deleting chat files: \(error.localizedDescription)"
         }
-        threads = [ChatThread(id: UUID(), title: "New Chat", messages: [])]
+        threads = [newThread()]
         filteredThreadIDs = []
         persistedThreadFingerprintByID = [:]
         tokenEstimateFingerprintByThread = [:]
@@ -1509,6 +1822,46 @@ struct ContentView: View {
         }
     }
 
+    private func syncSelectedModelWithCurrentThread() {
+        guard let idx = selectedThreadIndex else { return }
+
+        let threadModelReference = threads[idx].modelReference ?? ""
+        if !threadModelReference.isEmpty,
+            models.contains(where: { $0.reference == threadModelReference })
+        {
+            if selectedModelReference != threadModelReference {
+                selectedModelReference = threadModelReference
+            }
+            return
+        }
+
+        let fallback = preferredDefaultModelReference
+
+        if selectedModelReference != fallback {
+            selectedModelReference = fallback
+        }
+        threads[idx].modelReference = fallback.isEmpty ? nil : fallback
+    }
+
+    private var resolvedDefaultSystemPrompt: String? {
+        let trimmed = defaultSystemInstructions.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func applyDefaultSystemPromptToUntitledThreads() {
+        guard let defaultPrompt = resolvedDefaultSystemPrompt else { return }
+        for idx in threads.indices {
+            let hasMessages = !threads[idx].messages.isEmpty
+            let isUntitled = threads[idx].title == "New Chat"
+            let hasPrompt = !(threads[idx].systemPrompt ?? "").trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty
+            if !hasMessages && isUntitled && !hasPrompt {
+                threads[idx].systemPrompt = defaultPrompt
+            }
+        }
+    }
+
     private func scheduleFilteredThreadCacheRebuild() {
         let query = debouncedSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         if query.isEmpty {
@@ -1663,7 +2016,19 @@ struct ContentView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: workItem)
     }
 
-    private func startSend() {
+    private func startSend(force: Bool = false) {
+        if !force,
+            let usage = currentContextUsage,
+            usage.isAtRisk
+        {
+            let alert = NSAlert()
+            alert.messageText = "Context Window Almost Full"
+            alert.informativeText =
+                "This chat is above 90% of the model context limit. Sending may fail or lose older context."
+            alert.addButton(withTitle: "Send Anyway")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
         guard streamingTask == nil else { return }
         streamingTask = Task {
             await sendMessage()
@@ -1971,6 +2336,8 @@ struct ContentView: View {
             return
         }
 
+        collected = collected.filter { !isImageGenerationModel($0) }
+
         collected.sort { lhs, rhs in
             if lhs.provider != rhs.provider {
                 return lhs.provider.rawValue < rhs.provider.rawValue
@@ -1981,8 +2348,9 @@ struct ContentView: View {
         models = collected
 
         if !models.contains(where: { $0.reference == selectedModelReference }) {
-            selectedModelReference = models.first?.reference ?? ""
+            selectedModelReference = preferredDefaultModelReference
         }
+        syncSelectedModelWithCurrentThread()
 
         var parts: [String] = []
         for provider in AIProvider.allCases {
@@ -2032,7 +2400,7 @@ struct ContentView: View {
             id: UUID(), role: .user, text: text, timestamp: .now, attachments: messageAttachments)
         threads[idx].messages.append(userMessage)
         if threads[idx].title == "New Chat" {
-            threads[idx].title = String(text.prefix(40))
+            threads[idx].title = suggestedThreadTitle(from: text, attachments: messageAttachments)
         }
 
         defer {
@@ -2210,9 +2578,10 @@ struct ContentView: View {
             // Build system prompt: custom prompt + agent tools prompt (if applicable)
             var systemPromptParts: [String] = []
 
-            // Add custom system prompt from sidebar if set
-            if let customPrompt = threads[currentIdx].systemPrompt, !customPrompt.isEmpty {
-                systemPromptParts.append(customPrompt)
+            systemPromptParts.append(assistantSafetyBaselinePrompt)
+
+            if let configuredPrompt = resolvedSystemPrompt(for: threads[currentIdx]) {
+                systemPromptParts.append(configuredPrompt)
             }
 
             // Add agent system prompt (invisible in UI, only sent to LLM)
@@ -3032,6 +3401,14 @@ struct ContentView: View {
         default: return "exclamationmark.triangle"
         }
     }
+
+    private func resolvedSystemPrompt(for thread: ChatThread) -> String? {
+        let threadPrompt = (thread.systemPrompt ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !threadPrompt.isEmpty {
+            return threadPrompt
+        }
+        return resolvedDefaultSystemPrompt
+    }
     // MARK: - Dangerous Mode: Undo Tracking
 
     /// Captures the state of a file before a destructive tool modifies it.
@@ -3390,21 +3767,92 @@ struct ContentView: View {
         }
     }
 
+    private func suggestedThreadTitle(from text: String, attachments: [Attachment]) -> String {
+        let normalizedText = text
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !normalizedText.isEmpty {
+            return String(normalizedText.prefix(40))
+        }
+
+        if let firstAttachment = attachments.first {
+            return String("File: \(firstAttachment.fileName)".prefix(40))
+        }
+
+        return "New Chat"
+    }
+
     // MARK: - Message Row Helper
 
     @ViewBuilder
-    private func messageRow(for message: ChatMessage, lastAssistantID: UUID?) -> some View {
+    private func messageRow(
+        for message: ChatMessage,
+        at index: Int,
+        in messages: [ChatMessage],
+        lastAssistantID: UUID?
+    ) -> some View {
         let isLastAssistant = message.role == .assistant && message.id == lastAssistantID
         let isAgentModeForThread = selectedThreadIndex.map { threads[$0].agentEnabled } ?? false
+        let mergedResults = mergedToolResults(forAssistantAt: index, in: messages)
         MessageRow(
             message: message,
             isStreaming: message.id == streamingMessageID,
             isAgentMode: isAgentModeForThread,
-            isLastAssistant: isLastAssistant && !isSending
+            isLastAssistant: isLastAssistant && !isSending,
+            mergedToolResultsByCallID: mergedResults
         ) {
             retryLastResponse()
         }
         .equatable()
+    }
+
+    private func mergedToolResults(forAssistantAt index: Int, in messages: [ChatMessage]) -> [String: ChatMessage] {
+        guard index < messages.count else { return [:] }
+        let assistantMessage = messages[index]
+        guard assistantMessage.role == .assistant,
+            let toolCalls = assistantMessage.toolCalls,
+            !toolCalls.isEmpty
+        else {
+            return [:]
+        }
+
+        let toolCallIDs = Set(toolCalls.map(\.id))
+        var results: [String: ChatMessage] = [:]
+        var cursor = index + 1
+        while cursor < messages.count {
+            let candidate = messages[cursor]
+            if candidate.role != .tool {
+                break
+            }
+            if let callID = candidate.toolCallID, toolCallIDs.contains(callID) {
+                results[callID] = candidate
+            }
+            cursor += 1
+        }
+        return results
+    }
+
+    private func shouldHideMergedToolMessage(at index: Int, in messages: [ChatMessage]) -> Bool {
+        guard index < messages.count else { return false }
+        let message = messages[index]
+        guard message.role == .tool, let toolCallID = message.toolCallID else { return false }
+
+        var cursor = index - 1
+        while cursor >= 0 {
+            let previous = messages[cursor]
+            if previous.role == .tool {
+                cursor -= 1
+                continue
+            }
+            guard previous.role == .assistant,
+                let calls = previous.toolCalls,
+                calls.contains(where: { $0.id == toolCallID })
+            else {
+                return false
+            }
+            return true
+        }
+        return false
     }
 }
 
