@@ -5,7 +5,6 @@ import UniformTypeIdentifiers
 
 enum SettingsTab: String, CaseIterable, Identifiable {
     case general = "General"
-    case skills = "Skills"
     case providers = "Providers"
     case mcp = "MCP Servers"
     case theme = "Theme"
@@ -16,7 +15,6 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .general: return "gearshape"
-        case .skills: return "sparkles"
         case .providers: return "bolt.horizontal"
         case .mcp: return "server.rack"
         case .theme: return "paintbrush"
@@ -74,10 +72,6 @@ struct SettingsView: View {
     @State private var serverToDelete: String? = nil
     @State private var isShowingDeleteAllChatsAlert = false
     @State private var settingsSearchText: String = ""
-    @State private var discoveredSkills: [HumlexSkill] = []
-    @State private var skillSearchRoots: [String] = []
-    @State private var isRefreshingSkills = false
-    @State private var skillsFilterText: String = ""
     @State private var themeImportStatusMessage: String?
     @State private var isThemeImportError = false
 
@@ -89,8 +83,6 @@ struct SettingsView: View {
             return "MCP Servers"
         case .general:
             return "General"
-        case .skills:
-            return "Skills"
         case .theme:
             return "Theme"
         case .systemInstructions:
@@ -106,8 +98,6 @@ struct SettingsView: View {
             return "Configure Model Context Protocol servers"
         case .general:
             return "App behavior and defaults"
-        case .skills:
-            return "Discover and manage Humlex SKILL.md instructions"
         case .theme:
             return "Appearance and syntax palette"
         case .systemInstructions:
@@ -123,8 +113,6 @@ struct SettingsView: View {
             return "server.rack"
         case .general:
             return "gearshape"
-        case .skills:
-            return "sparkles"
         case .theme:
             return "paintbrush"
         case .systemInstructions:
@@ -261,8 +249,6 @@ struct SettingsView: View {
         switch selectedTab {
         case .general:
             generalDetail
-        case .skills:
-            skillsDetail
         case .providers:
             providerOverviewDetail
         case .mcp:
@@ -277,7 +263,7 @@ struct SettingsView: View {
     // MARK: - Settings Sidebar
 
     private var settingsSidebar: some View {
-        let generalTabs: [SettingsTab] = [.general, .skills, .theme, .systemInstructions]
+        let generalTabs: [SettingsTab] = [.general, .theme, .systemInstructions]
         let aiTabs: [SettingsTab] = [.providers]
         let filteredGeneralTabs = generalTabs.filter { matchesSettingsSearch($0.rawValue) }
         let filteredAITabs = aiTabs.filter { matchesSettingsSearch($0.rawValue) }
@@ -471,9 +457,6 @@ struct SettingsView: View {
         }
         .frame(maxWidth: .infinity)
         .onChange(of: selectedTab) { _, newValue in
-            if newValue == .skills {
-                refreshSkills()
-            }
             let available = providers(for: newValue)
             if let first = available.first, !available.contains(selectedProvider) {
                 selectedProvider = first
@@ -679,173 +662,6 @@ struct SettingsView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(settingsControlBackground, in: Capsule())
-        }
-    }
-
-    // MARK: - Skills Detail
-
-    private var filteredSkills: [HumlexSkill] {
-        let query = skillsFilterText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return discoveredSkills }
-        return discoveredSkills.filter { skill in
-            skill.name.localizedCaseInsensitiveContains(query)
-                || skill.summary.localizedCaseInsensitiveContains(query)
-                || skill.sourcePath.localizedCaseInsensitiveContains(query)
-        }
-    }
-
-    private var skillsDetail: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Skills")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(theme.textPrimary)
-
-                Spacer()
-
-                if isRefreshingSkills {
-                    ProgressView()
-                        .controlSize(.small)
-                }
-
-                HStack(spacing: 4) {
-                    Image(systemName: "doc.text")
-                        .font(.system(size: 11))
-                    Text("\(discoveredSkills.count)")
-                        .font(.system(size: 11))
-                }
-                .foregroundStyle(discoveredSkills.isEmpty ? theme.textSecondary : .green)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(settingsControlBackground, in: Capsule())
-                .overlay(Capsule().stroke(settingsBorderColor, lineWidth: 1))
-
-                Button {
-                    refreshSkills()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(theme.textSecondary)
-                        .frame(width: 24, height: 24)
-                        .background(
-                            settingsControlBackground, in: RoundedRectangle(cornerRadius: 6))
-                }
-                .buttonStyle(.plain)
-                .help("Refresh skills")
-            }
-            .padding(.horizontal, 24)
-            .padding(.top, 20)
-            .padding(.bottom, 16)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    settingsGroup("Usage") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("In agent mode, add skills in your prompt with `$skillName`.")
-                                .font(.system(size: 13))
-                                .foregroundStyle(theme.textSecondary)
-                            if let currentWorkingDirectory,
-                                !currentWorkingDirectory.trimmingCharacters(
-                                    in: .whitespacesAndNewlines
-                                ).isEmpty
-                            {
-                                Text("Active working directory: \(currentWorkingDirectory)")
-                                    .font(.system(size: 12, design: .monospaced))
-                                    .foregroundStyle(theme.textTertiary)
-                                    .textSelection(.enabled)
-                            }
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 12)
-                    }
-
-                    settingsGroup("Search") {
-                        HStack(spacing: 8) {
-                            Image(systemName: "magnifyingglass")
-                                .font(.system(size: 12))
-                                .foregroundStyle(theme.textTertiary)
-                            TextField("Filter skills", text: $skillsFilterText)
-                                .textFieldStyle(.plain)
-                                .font(.system(size: 13))
-                                .foregroundStyle(theme.textPrimary)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 9)
-                    }
-
-                    settingsGroup("Skill Roots") {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ForEach(skillSearchRoots, id: \.self) { root in
-                                Text(root)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(theme.textTertiary)
-                                    .textSelection(.enabled)
-                            }
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 12)
-                    }
-
-                    settingsGroup("Detected Skills") {
-                        if filteredSkills.isEmpty {
-                            Text("No SKILL.md files found.")
-                                .font(.system(size: 12))
-                                .foregroundStyle(theme.textSecondary)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 12)
-                        } else {
-                            VStack(spacing: 0) {
-                                ForEach(Array(filteredSkills.enumerated()), id: \.element.id) {
-                                    index, skill in
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        HStack(alignment: .firstTextBaseline) {
-                                            Text(skill.name)
-                                                .font(.system(size: 14, weight: .semibold))
-                                                .foregroundStyle(theme.textPrimary)
-                                            Spacer()
-                                            Button {
-                                                NSWorkspace.shared.open(
-                                                    URL(fileURLWithPath: skill.sourcePath))
-                                            } label: {
-                                                Text("Open")
-                                                    .font(.system(size: 11))
-                                            }
-                                            .buttonStyle(.bordered)
-                                            .controlSize(.mini)
-                                        }
-
-                                        if !skill.summary.isEmpty {
-                                            Text(skill.summary)
-                                                .font(.system(size: 12))
-                                                .foregroundStyle(theme.textSecondary)
-                                        }
-
-                                        Text(skill.sourcePath)
-                                            .font(.system(size: 11, design: .monospaced))
-                                            .foregroundStyle(theme.textTertiary)
-                                            .textSelection(.enabled)
-                                    }
-                                    .padding(.horizontal, 14)
-                                    .padding(.vertical, 10)
-
-                                    if index < filteredSkills.count - 1 {
-                                        settingsBorderColor.opacity(0.6).frame(height: 1)
-                                            .padding(.leading, 14)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                .padding(.horizontal, 22)
-                .padding(.vertical, 18)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .onAppear {
-            if discoveredSkills.isEmpty {
-                refreshSkills()
-            }
         }
     }
 
@@ -1807,24 +1623,10 @@ struct SettingsView: View {
 
     private func providers(for tab: SettingsTab) -> [AIProvider] {
         switch tab {
-        case .general, .skills, .mcp, .theme, .systemInstructions:
+        case .general, .mcp, .theme, .systemInstructions:
             return []
         case .providers:
             return AIProvider.allCases
-        }
-    }
-
-    private func refreshSkills() {
-        isRefreshingSkills = true
-        let workingDirectory = currentWorkingDirectory
-        Task(priority: .userInitiated) {
-            let skills = HumlexSkillCatalog.availableSkills(workingDirectory: workingDirectory)
-            let roots = HumlexSkillCatalog.searchRoots(workingDirectory: workingDirectory)
-            await MainActor.run {
-                discoveredSkills = skills
-                skillSearchRoots = roots
-                isRefreshingSkills = false
-            }
         }
     }
 

@@ -2000,21 +2000,6 @@ struct ContentView: View {
             ? mcpManager.tools + AgentTools.definitions()
             : mcpManager.tools + AgentTools.fetchDefinitions()
 
-        let skillActivation: HumlexSkillActivation = {
-            let latestUserText =
-                threads[idx].messages.last(where: { $0.role == .user })?.text ?? ""
-            return HumlexSkillCatalog.activate(from: latestUserText, workingDirectory: workDir)
-        }()
-
-        if !skillActivation.activeSkills.isEmpty {
-            let names = skillActivation.activeSkills.map(\.name).joined(separator: ", ")
-            toastManager.show(.info("Skills active: \(names)", icon: "sparkles"))
-        }
-        if !skillActivation.missingSkillNames.isEmpty {
-            statusMessage =
-                "Skills not found: \(skillActivation.missingSkillNames.joined(separator: ", "))."
-        }
-
         for _ in 0..<maxToolIterations {
             // Build history from current thread messages
             guard let currentIdx = threads.firstIndex(where: { $0.id == threadID }) else { return }
@@ -2081,10 +2066,6 @@ struct ContentView: View {
                     - timeout: Timeout in seconds (default 30, max 60)
                     """
                 systemPromptParts.append(fetchPrompt)
-            }
-
-            if let skillPrompt = skillActivation.systemPromptBlock, !skillPrompt.isEmpty {
-                systemPromptParts.append(skillPrompt)
             }
 
             // Insert combined system prompt at the beginning of history
