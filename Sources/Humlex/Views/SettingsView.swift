@@ -9,6 +9,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case mcp = "MCP Servers"
     case theme = "Theme"
     case systemInstructions = "System Instructions"
+    case experimental = "Experimental"
 
     var id: String { rawValue }
 
@@ -19,6 +20,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .mcp: return "server.rack"
         case .theme: return "paintbrush"
         case .systemInstructions: return "text.bubble"
+        case .experimental: return "flask"
         }
     }
 }
@@ -87,6 +89,8 @@ struct SettingsView: View {
             return "Theme"
         case .systemInstructions:
             return "System Instructions"
+        case .experimental:
+            return "Experimental"
         }
     }
 
@@ -102,6 +106,8 @@ struct SettingsView: View {
             return "Appearance and syntax palette"
         case .systemInstructions:
             return "Default instructions for new chats"
+        case .experimental:
+            return "Preview features that may change or be removed"
         }
     }
 
@@ -117,6 +123,8 @@ struct SettingsView: View {
             return "paintbrush"
         case .systemInstructions:
             return "text.bubble"
+        case .experimental:
+            return "flask"
         }
     }
 
@@ -257,13 +265,15 @@ struct SettingsView: View {
             themeDetail
         case .systemInstructions:
             systemInstructionsDetail
+        case .experimental:
+            experimentalDetail
         }
     }
 
     // MARK: - Settings Sidebar
 
     private var settingsSidebar: some View {
-        let generalTabs: [SettingsTab] = [.general, .theme, .systemInstructions]
+        let generalTabs: [SettingsTab] = [.general, .theme, .systemInstructions, .experimental]
         let aiTabs: [SettingsTab] = [.providers]
         let filteredGeneralTabs = generalTabs.filter { matchesSettingsSearch($0.rawValue) }
         let filteredAITabs = aiTabs.filter { matchesSettingsSearch($0.rawValue) }
@@ -1312,6 +1322,133 @@ struct SettingsView: View {
         .background(settingsChromeBackground)
     }
 
+    // MARK: - Experimental Detail
+
+    private var experimentalDetail: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    // Warning banner
+                    HStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(.orange)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Experimental Features")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(theme.textPrimary)
+                            Text(
+                                "These features are under development and may be unstable, change, or be removed in future versions."
+                            )
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.textSecondary)
+                        }
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        Color.orange.opacity(0.1),
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+                    )
+
+                    if ExperimentalFeatures.allFeatures.isEmpty {
+                        // Empty state
+                        VStack(spacing: 12) {
+                            Image(systemName: "flask")
+                                .font(.system(size: 32))
+                                .foregroundStyle(theme.textTertiary)
+
+                            Text("No experimental features available")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(theme.textSecondary)
+
+                            Text("Check back later for new features to try out.")
+                                .font(.system(size: 12))
+                                .foregroundStyle(theme.textTertiary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 40)
+                    } else {
+                        settingsGroup("Features") {
+                            VStack(spacing: 0) {
+                                ForEach(
+                                    Array(ExperimentalFeatures.allFeatures.enumerated()),
+                                    id: \.element.id
+                                ) { index, flag in
+                                    experimentalFeatureRow(flag: flag)
+
+                                    if index < ExperimentalFeatures.allFeatures.count - 1 {
+                                        settingsBorderColor.opacity(0.6).frame(height: 1)
+                                            .padding(.leading, 14)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 22)
+                .padding(.vertical, 18)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func experimentalFeatureRow(flag: ExperimentalFeatures.Flag) -> some View {
+        let info = ExperimentalFeatures.info(for: flag)
+        let isEnabled = Binding(
+            get: { ExperimentalFeatures.isEnabled(flag) },
+            set: { ExperimentalFeatures.setEnabled(flag, enabled: $0) }
+        )
+
+        return VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Image(systemName: info.icon)
+                    .font(.system(size: 14))
+                    .foregroundStyle(theme.accent)
+                    .frame(width: 24)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(info.title)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(theme.textPrimary)
+
+                        if info.requiresRestart {
+                            Text("Restart required")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.orange)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(
+                                    Color.orange.opacity(0.15),
+                                    in: Capsule()
+                                )
+                        }
+                    }
+
+                    Text(info.description)
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.textTertiary)
+                        .lineLimit(2)
+                }
+
+                Spacer()
+
+                Toggle("", isOn: isEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(theme.accent)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+        }
+    }
+
     // MARK: - General Detail
 
     private var generalDetail: some View {
@@ -1623,7 +1760,7 @@ struct SettingsView: View {
 
     private func providers(for tab: SettingsTab) -> [AIProvider] {
         switch tab {
-        case .general, .mcp, .theme, .systemInstructions:
+        case .general, .mcp, .theme, .systemInstructions, .experimental:
             return []
         case .providers:
             return AIProvider.allCases

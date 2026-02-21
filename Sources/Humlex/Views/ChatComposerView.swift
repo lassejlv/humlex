@@ -427,7 +427,7 @@ struct ChatComposerView: View {
 
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: true) {
-                    VStack(alignment: .leading, spacing: 0) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(mentionResults.enumerated()), id: \.element.id) {
                             index, entry in
                             mentionRow(entry, isSelected: index == mentionSelectedIndex)
@@ -442,7 +442,7 @@ struct ChatComposerView: View {
                         }
                     }
                 }
-                .frame(maxHeight: 200)
+                .frame(height: min(CGFloat(mentionResults.count) * 28 + 8, 200))
                 .onChange(of: mentionSelectedIndex) { _, newIndex in
                     if newIndex < mentionResults.count {
                         withAnimation(.easeInOut(duration: 0.1)) {
@@ -587,6 +587,7 @@ struct ChatComposerView: View {
     }
 
     /// Lists files from the working directory, filtered by mentionQuery.
+    /// Supports recursive search when filter text has 2+ chars (searches up to 3 levels deep).
     private func updateMentionResults() {
         guard let workDir = workingDirectory else {
             mentionResults = []
@@ -598,6 +599,7 @@ struct ChatComposerView: View {
         // Determine base directory and filter text
         var basePath = workDir
         var filterText = mentionQuery
+        var useRecursiveSearch = false
 
         // Support subdirectory traversal: if query contains '/', split into path + filter
         if let lastSlash = mentionQuery.lastIndex(of: "/") {
@@ -615,65 +617,107 @@ struct ChatComposerView: View {
             }
         }
 
-        // List directory contents
-        guard let contents = try? fm.contentsOfDirectory(atPath: basePath) else {
-            mentionResults = []
-            return
+        // Enable recursive search when filter has 2+ characters (to keep it fast)
+        if filterText.count >= 2 && !filterText.contains("/") {
+            useRecursiveSearch = true
         }
 
         // Hidden files/directories and common noise to skip
         let skipDirs: Set<String> = [
             ".git", ".build", "node_modules", ".DS_Store", "__pycache__", ".swiftpm", "DerivedData",
+            ".next", "dist", "build", ".cache", ".turbo", "coverage", ".nyc_output", "vendor",
         ]
 
         var entries: [MentionEntry] = []
-        for name in contents {
-            // Skip hidden files unless query starts with '.'
-            if name.hasPrefix(".") && !filterText.hasPrefix(".") { continue }
-            if skipDirs.contains(name) { continue }
+        let maxResults = 50
+        let maxDepth = useRecursiveSearch ? 4 : 1
 
-            // Filter by typed text (case-insensitive prefix/contains match)
-            if !filterText.isEmpty {
-                let nameLower = name.lowercased()
-                let filterLower = filterText.lowercased()
-                if !nameLower.contains(filterLower) { continue }
-            }
+        // Recursive file search helper
+        func searchDirectory(_ dirPath: String, relativeTo baseDir: String, depth: Int) {
+            guard depth <= maxDepth, entries.count < maxResults else { return }
 
-            let fullPath = (basePath as NSString).appendingPathComponent(name)
-            var isDir: ObjCBool = false
-            fm.fileExists(atPath: fullPath, isDirectory: &isDir)
+            guard let contents = try? fm.contentsOfDirectory(atPath: dirPath) else { return }
 
-            let relativePath: String
-            if let lastSlash = mentionQuery.lastIndex(of: "/") {
-                let subdir = String(mentionQuery[mentionQuery.startIndex...lastSlash])
-                relativePath = subdir + name
-            } else {
-                relativePath = name
-            }
+            for name in contents {
+                guard entries.count < maxResults else { return }
 
-            var fileSize = 0
-            if !isDir.boolValue {
-                fileSize = (try? fm.attributesOfItem(atPath: fullPath)[.size] as? Int) ?? 0
-            }
+                // Skip hidden files unless query starts with '.'
+                if name.hasPrefix(".") && !filterText.hasPrefix(".") { continue }
+                if skipDirs.contains(name) { continue }
 
-            entries.append(
-                MentionEntry(
-                    name: name,
-                    relativePath: relativePath,
+                let fullPath = (dirPath as NSString).appendingPathComponent(name)
+                var isDir: ObjCBool = false
+                fm.fileExists(atPath: fullPath, isDirectory: &isDir)
+
+                // Calculate relative path from working directory
+                let relativePath: String
+                if dirPath == baseDir {
+                    relativePath = name
+                } else {
+                    let relativeDir = String(dirPath.dropFirst(baseDir.count + 1))
+                    relativePath = (relativeDir as NSString).appendingPathComponent(name)
+                }
+
+                // For directories in recursive mode, descend into them
+                if isDir.boolValue {
+                    if useRecursiveSearch && depth < maxDepth {
+                        searchDirectory(fullPath, relativeTo: baseDir, depth: depth + 1)
+                    } else if !useRecursiveSearch {
+                        // Non-recursive: show directories if they match filter
+                        if filterText.isEmpty || name.lowercased().contains(filterText.lowercased()) {
+                            entries.append(MentionEntry(
+                                name: name,
+                                relativePath: prependSubdirPrefix(relativePath),
+                                fullPath: fullPath,
+                                isDirectory: true,
+                                fileSize: 0
+                            ))
+                        }
+                    }
+                    continue
+                }
+
+                // Filter files by typed text (case-insensitive contains match)
+                if !filterText.isEmpty {
+                    let nameLower = name.lowercased()
+                    let filterLower = filterText.lowercased()
+                    if !nameLower.contains(filterLower) { continue }
+                }
+
+                let fileSize = (try? fm.attributesOfItem(atPath: fullPath)[.size] as? Int) ?? 0
+
+                entries.append(MentionEntry(
+                    name: useRecursiveSearch ? relativePath : name,
+                    relativePath: prependSubdirPrefix(relativePath),
                     fullPath: fullPath,
-                    isDirectory: isDir.boolValue,
+                    isDirectory: false,
                     fileSize: fileSize
                 ))
+            }
         }
 
-        // Sort: directories first, then alphabetical
+        // Helper to prepend subdirectory prefix if navigated into a subdir
+        func prependSubdirPrefix(_ path: String) -> String {
+            if let lastSlash = mentionQuery.lastIndex(of: "/") {
+                let subdir = String(mentionQuery[mentionQuery.startIndex...lastSlash])
+                return subdir + path
+            }
+            return path
+        }
+
+        searchDirectory(basePath, relativeTo: basePath, depth: 1)
+
+        // Sort: directories first (non-recursive), then by path length, then alphabetical
         entries.sort { a, b in
-            if a.isDirectory != b.isDirectory { return a.isDirectory }
+            if !useRecursiveSearch && a.isDirectory != b.isDirectory { return a.isDirectory }
+            // Prefer shorter paths (closer to root)
+            if a.relativePath.components(separatedBy: "/").count != b.relativePath.components(separatedBy: "/").count {
+                return a.relativePath.components(separatedBy: "/").count < b.relativePath.components(separatedBy: "/").count
+            }
             return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
         }
 
-        // Cap results
-        mentionResults = Array(entries.prefix(50))
+        mentionResults = Array(entries.prefix(maxResults))
     }
 
     /// Selects a file mention: replaces @query in draft with @filename and attaches the file.

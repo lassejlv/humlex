@@ -132,8 +132,12 @@ struct CommandPalette: View {
         )
         .shadow(color: .black.opacity(0.3), radius: 20, y: 10)
         .onAppear {
-            isSearchFocused = true
             selectedIndex = 0
+            searchText = ""
+            // Delay focus to ensure view is ready
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                isSearchFocused = true
+            }
         }
         .onChange(of: searchText) { _, _ in
             selectedIndex = 0
@@ -226,17 +230,25 @@ struct CommandPaletteOverlay: View {
                 // Backdrop
                 Color.black.opacity(0.4)
                     .ignoresSafeArea()
+                    .contentShape(Rectangle())
                     .onTapGesture {
                         isPresented = false
                     }
                     .transition(.opacity)
-                
-                // Palette
-                CommandPalette(isPresented: $isPresented, actions: actions)
-                    .transition(.asymmetric(
-                        insertion: .scale(scale: 0.95).combined(with: .opacity),
-                        removal: .scale(scale: 0.95).combined(with: .opacity)
-                    ))
+
+                // Palette - positioned at top with some offset
+                VStack {
+                    Spacer()
+                        .frame(height: 120)
+
+                    CommandPalette(isPresented: $isPresented, actions: actions)
+
+                    Spacer()
+                }
+                .transition(.asymmetric(
+                    insertion: .scale(scale: 0.95).combined(with: .opacity),
+                    removal: .scale(scale: 0.95).combined(with: .opacity)
+                ))
             }
         }
         .animation(.spring(response: 0.25, dampingFraction: 0.9), value: isPresented)

@@ -113,6 +113,13 @@ struct ContentView: View {
     @State private var undoHistoryByThread: [UUID: [UndoEntry]] = [:]
     @State private var isShowingUndoPanel = false
     @State private var isShowingDeleteAllChatsAlert = false
+    @State private var isShowingCommandPalette = false
+    @State private var commandPaletteMonitor: Any?
+
+    // MARK: - Terminal Panel
+    @State private var isTerminalExpanded = false
+    @ExperimentalFeature(.terminalPanel) private var isTerminalPanelEnabled
+
     @StateObject private var mcpManager = MCPManager.shared
     @StateObject private var debugPerformanceMonitor = DebugPerformanceMonitor()
     @EnvironmentObject private var themeManager: ThemeManager
@@ -332,12 +339,27 @@ struct ContentView: View {
                         isShowingOnboarding = true
                     }
                 }
+
+                // Set up ⌘K shortcut for command palette
+                commandPaletteMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                    if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "k" {
+                        if ExperimentalFeatures.isEnabled(.commandPalette) {
+                            isShowingCommandPalette.toggle()
+                            return nil
+                        }
+                    }
+                    return event
+                }
             }
             .onDisappear {
                 stopStreaming()
                 debugPerformanceMonitor.stop()
                 tokenEstimateRefreshWorkItem?.cancel()
                 searchRefreshWorkItem?.cancel()
+                if let monitor = commandPaletteMonitor {
+                    NSEvent.removeMonitor(monitor)
+                    commandPaletteMonitor = nil
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .openSettingsRequested)) { _ in
                 isShowingSettings = true
@@ -420,6 +442,14 @@ struct ContentView: View {
                     DebugPerformanceBanner(monitor: debugPerformanceMonitor)
                         .padding(.top, 14)
                         .padding(.trailing, 14)
+                }
+            }
+            .overlay {
+                if ExperimentalFeatures.isEnabled(.commandPalette) && isShowingCommandPalette {
+                    CommandPaletteOverlay(
+                        isPresented: $isShowingCommandPalette,
+                        actions: buildCommandPaletteActions()
+                    )
                 }
             }
             .fileImporter(
@@ -537,6 +567,18 @@ struct ContentView: View {
     private var detailView: some View {
         VStack(spacing: 0) {
             detailContent
+
+            // Terminal panel for agent mode
+            if isTerminalPanelEnabled,
+               let idx = selectedThreadIndex,
+               threads[idx].agentEnabled
+            {
+                TerminalPanelView(
+                    isExpanded: $isTerminalExpanded,
+                    workingDirectory: threads[idx].workingDirectory
+                )
+            }
+
             chatComposerView
         }
         .background(chatCanvasBackground)
@@ -873,6 +915,129 @@ struct ContentView: View {
         let thread = ChatThread(id: UUID(), title: "New Chat", messages: [])
         threads.insert(thread, at: 0)
         selectedThreadID = thread.id
+    }
+
+    private func buildCommandPaletteActions() -> [CommandAction] {
+        var actions: [CommandAction] = []
+
+        // Chat actions
+        actions.append(CommandAction(
+            title: "New Chat",
+            subtitle: "Start a new conversation",
+            icon: "square.and.pencil",
+            shortcut: "⌘N"
+        ) {
+            createThread()
+        })
+
+        actions.append(CommandAction(
+            title: "Settings",
+            subtitle: "Open app settings",
+            icon: "gearshape",
+            shortcut: "⌘,"
+        ) {
+            isShowingSettings = true
+        })
+
+        // Thread-specific actions
+        if selectedThreadIndex != nil {
+            actions.append(CommandAction(
+                title: "Clear Current Chat",
+                subtitle: "Remove all messages in this chat",
+                icon: "trash",
+                shortcut: nil
+            ) {
+                if let idx = selectedThreadIndex {
+                    threads[idx].messages = []
+                    toastManager.show(.success("Chat cleared", icon: "trash"))
+                }
+            })
+
+            actions.append(CommandAction(
+                title: "Export Chat to Markdown",
+                subtitle: "Save this conversation as a .md file",
+                icon: "square.and.arrow.up",
+                shortcut: nil
+            ) {
+                if let idx = selectedThreadIndex {
+                    exportThreadToMarkdown(threads[idx])
+                }
+            })
+
+            if let idx = selectedThreadIndex {
+                let thread = threads[idx]
+                actions.append(CommandAction(
+                    title: thread.agentEnabled ? "Disable Agent Mode" : "Enable Agent Mode",
+                    subtitle: thread.agentEnabled ? "Turn off file system access" : "Allow file operations",
+                    icon: thread.agentEnabled ? "bolt.slash" : "bolt",
+                    shortcut: nil
+                ) {
+                    if thread.agentEnabled {
+                        threads[idx].agentEnabled = false
+                        threads[idx].workingDirectory = nil
+                        toastManager.show(.info("Agent mode disabled"))
+                    } else {
+                        isShowingAgentDirectoryPicker = true
+                    }
+                })
+            }
+        }
+
+        // Model switching
+        for model in models.prefix(10) {
+            actions.append(CommandAction(
+                title: "Switch to \(model.displayName)",
+                subtitle: model.provider.rawValue,
+                icon: "cpu",
+                shortcut: nil
+            ) {
+                selectedModelReference = model.reference
+                toastManager.show(.info("Model: \(model.displayName)"))
+            })
+        }
+
+        // Theme switching
+        for appTheme in themeManager.themes {
+            actions.append(CommandAction(
+                title: "Theme: \(appTheme.name)",
+                subtitle: "Switch appearance theme",
+                icon: "paintbrush",
+                shortcut: nil
+            ) {
+                themeManager.select(appTheme)
+                toastManager.show(.info("Theme: \(appTheme.name)", icon: "paintbrush"))
+            })
+        }
+
+        // Data actions
+        actions.append(CommandAction(
+            title: "Import Chats",
+            subtitle: "Load conversations from file",
+            icon: "square.and.arrow.down",
+            shortcut: nil
+        ) {
+            importChatsFromFile()
+        })
+
+        actions.append(CommandAction(
+            title: "Export All Chats",
+            subtitle: "Save all conversations to a zip file",
+            icon: "archivebox",
+            shortcut: nil
+        ) {
+            exportAllChatsToZip()
+        })
+
+        actions.append(CommandAction(
+            title: "Refresh Models",
+            subtitle: "Fetch available models from providers",
+            icon: "arrow.clockwise",
+            shortcut: nil
+        ) {
+            Task { await fetchModels() }
+        })
+
+        return actions
     }
 
     private func completeOnboarding(openSettings: Bool) {
@@ -2867,7 +3032,6 @@ struct ContentView: View {
         default: return "exclamationmark.triangle"
         }
     }
-
     // MARK: - Dangerous Mode: Undo Tracking
 
     /// Captures the state of a file before a destructive tool modifies it.
